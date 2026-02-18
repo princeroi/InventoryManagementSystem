@@ -19,9 +19,9 @@ class IssuanceResource extends Resource
 {
     protected static ?string $model = Issuance::class;
 
-    protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedRectangleStack;
+    protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedArrowUpOnSquare;
 
-    protected static ?string $recordTitleAttribute = 'Issuance';
+    protected static ?string $recordTitleAttribute = 'issued_to';
 
     public static function getNavigationGroup(): ?string
     {
@@ -40,9 +40,7 @@ class IssuanceResource extends Resource
 
     public static function getRelations(): array
     {
-        return [
-            //
-        ];
+        return [];
     }
 
     public static function getPages(): array
@@ -55,7 +53,10 @@ class IssuanceResource extends Resource
     public static function getEloquentQuery(): Builder
     {
         return parent::getEloquentQuery()
-            ->with('items.item');
+            ->with([
+                'site:id,name',      
+                'items.item:id,name',
+                'logs',
+            ]);
     }
-
 }

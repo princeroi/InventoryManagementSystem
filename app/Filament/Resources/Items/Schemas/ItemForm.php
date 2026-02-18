@@ -13,24 +13,29 @@ class ItemForm
     public static function configure(Schema $schema): Schema
     {
         return $schema
+            ->columns(2)
             ->components([
                 TextInput::make('name')
                     ->required(),
-                Textarea::make('description')
-                    ->default(null)
-                    ->columnSpanFull(),
-                Select::make('category')
-                    ->relationship('Category', 'name')
+
+                // Fixed: relationship name should be lowercase 'category' not 'Category'
+                Select::make('category_id')
+                    ->relationship('category', 'name')
+                    ->searchable()
                     ->preload()
                     ->required()
                     ->createOptionForm([
-                                TextInput::make('name')
-                                    ->label('Category Name')
-                                    ->required(),
-                                Textarea::make('description')
-                                    ->label('Description')
-                                    ->rows(2),
-                            ]),
+                        TextInput::make('name')
+                            ->label('Category Name')
+                            ->required(),
+                        Textarea::make('description')
+                            ->label('Description')
+                            ->rows(2),
+                    ]),
+
+                Textarea::make('description')
+                    ->default(null)
+                    ->columnSpanFull(),
 
                 Repeater::make('itemVariants')
                     ->relationship()
@@ -38,7 +43,7 @@ class ItemForm
                     ->schema([
                         TextInput::make('size_label')
                             ->required()
-                            ->placeholder('e.g. S. M. L, 500ml, EU 42...')
+                            ->placeholder('e.g. S, M, L, 500ml, EU 42...')
                             ->columnSpan(2),
                         TextInput::make('quantity')
                             ->numeric()
@@ -46,8 +51,7 @@ class ItemForm
                             ->minValue(0)
                             ->default(0)
                             ->columnSpan(1),
-
-                    ])   
+                    ])
                     ->columns(3)
                     ->addActionLabel('+ Add Variant')
                     ->reorderable()

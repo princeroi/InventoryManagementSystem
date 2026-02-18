@@ -15,9 +15,28 @@ use Filament\Forms\Components\Textarea;
 
 class IssuanceForm
 {
+    private static function variantsForItem(?int $itemId): array
+    {
+        if (! $itemId) {
+            return [];
+        }
+
+        static $cache = [];
+
+        if (! array_key_exists($itemId, $cache)) {
+            $cache[$itemId] = ItemVariant::where('item_id', $itemId)
+                ->get(['id', 'item_id', 'size_label', 'quantity'])
+                ->keyBy('size_label')
+                ->toArray();
+        }
+
+        return $cache[$itemId];
+    }
+
     public static function configure(Schema $schema): Schema
     {
         return $schema
+            ->columns(2)
             ->components([
                 Select::make('site_id')
                     ->label('Site')
@@ -82,11 +101,11 @@ class IssuanceForm
                     ->nullable()
                     ->columnSpanFull(),
 
-                // Outer repeater — one row per unique item
                 Repeater::make('issuance_items')
                     ->label('Items')
-                    ->columns(1)
+                    ->columnSpanFull()
                     ->schema([
+                        // Item dropdown — full width inside the outer repeater row
                         Select::make('item_id')
                             ->label('Item')
                             ->options(fn () => \App\Models\Item::pluck('name', 'id')->toArray())
@@ -96,7 +115,6 @@ class IssuanceForm
                             ->afterStateUpdated(function (callable $get, callable $set, $state) {
                                 if (! $state) return;
 
-                                // Check for duplicate item in outer repeater
                                 $allItems = $get('../../issuance_items') ?? [];
 
                                 $duplicates = array_filter($allItems, fn ($row) =>
@@ -121,21 +139,22 @@ class IssuanceForm
                             ->required()
                             ->columnSpanFull(),
 
-                        // Inner repeater — sizes & quantities for the selected item
+                        // Inner repeater — Size | Quantity displayed side by side (2 columns)
                         Repeater::make('sizes')
                             ->label('Sizes & Quantities')
                             ->columnSpanFull()
                             ->hidden(fn (callable $get) => ! $get('item_id'))
+                            ->columns(2)
                             ->schema([
                                 Select::make('size')
                                     ->label('Size')
                                     ->options(function (callable $get) {
-                                        $itemId = $get('../../item_id');
-                                        if (! $itemId) return [];
-                                        return ItemVariant::where('item_id', $itemId)
-                                            ->get()
+                                        $itemId   = $get('../../item_id');
+                                        $variants = self::variantsForItem($itemId);
+
+                                        return collect($variants)
                                             ->mapWithKeys(fn ($v) => [
-                                                $v->size_label => "{$v->size_label} (stock: {$v->quantity})"
+                                                $v['size_label'] => "{$v['size_label']} (stock: {$v['quantity']})"
                                             ])
                                             ->toArray();
                                     })
@@ -168,6 +187,7 @@ class IssuanceForm
                                     ->live(debounce: 500)
                                     ->required(),
 
+                                // Stock note below, spans both columns
                                 Placeholder::make('stock_note')
                                     ->label('')
                                     ->columnSpanFull()
@@ -179,22 +199,19 @@ class IssuanceForm
 
                                         if (! $itemId || ! $size) return null;
 
-                                        $variant = ItemVariant::where('item_id', $itemId)
-                                            ->where('size_label', $size)
-                                            ->first();
-
-                                        $stock = $variant?->quantity ?? 0;
+                                        $variants = self::variantsForItem($itemId);
+                                        $stock    = $variants[$size]['quantity'] ?? 0;
 
                                         if ($quantity > 0 && $quantity > $stock) {
-                                            $isHard = in_array($status, ['issued', 'released']);
-                                            $color  = $isHard ? 'danger' : 'warning';
+                                            $isHard  = in_array($status, ['issued', 'released']);
+                                            $color   = $isHard ? 'danger' : 'warning';
                                             $message = $isHard
                                                 ? "🚫 Current stock is <strong>{$stock}</strong>. Save as pending or decrease quantity."
                                                 : "⚠️ Current stock is <strong>{$stock}</strong>. You can save as pending but cannot issue/release until stock is sufficient.";
 
                                             return new HtmlString(
-                                                "<div class='text-sm font-medium text-{$color}-700 
-                                                    bg-{$color}-50 border border-{$color}-300 
+                                                "<div class='text-sm font-medium text-{$color}-700
+                                                    bg-{$color}-50 border border-{$color}-300
                                                     rounded-lg px-3 py-2 mt-1'>
                                                     {$message}
                                                 </div>"
@@ -202,14 +219,13 @@ class IssuanceForm
                                         }
 
                                         return new HtmlString(
-                                            "<div class='text-sm text-gray-600 bg-gray-50 border 
+                                            "<div class='text-sm text-gray-600 bg-gray-50 border
                                                 border-gray-200 rounded-lg px-3 py-2 mt-1'>
                                                 📦 Current stock: <strong>{$stock}</strong>
                                             </div>"
                                         );
                                     }),
                             ])
-                            ->columns(2)
                             ->defaultItems(1)
                             ->addActionLabel('Add Size'),
                     ])

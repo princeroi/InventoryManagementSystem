@@ -2,8 +2,6 @@
 
 namespace App\Filament\Resources\Restocks;
 
-use App\Filament\Resources\Restocks\Pages\CreateRestock;
-use App\Filament\Resources\Restocks\Pages\EditRestock;
 use App\Filament\Resources\Restocks\Pages\ListRestocks;
 use App\Filament\Resources\Restocks\Schemas\RestockForm;
 use App\Filament\Resources\Restocks\Tables\RestocksTable;
@@ -13,27 +11,13 @@ use Filament\Resources\Resource;
 use Filament\Schemas\Schema;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Table;
-use App\Models\ItemVariant;
-
-use Filament\Actions\ActionGroup;
-use Filament\Actions\EditAction;
-use Filament\Actions\BulkActionGroup;
-use Filament\Actions\Action;
-use Filament\Actions\BulkAction;
-use Filament\Tables\Columns\TextColumn;
-use Filament\Notifications\Notification;
-
 use Illuminate\Database\Eloquent\Builder;
-
-
 
 class RestockResource extends Resource
 {
     protected static ?string $model = Restock::class;
 
-    protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedRectangleStack;
-
-    protected static ?string $recordTitleAttribute = 'Restock';
+    protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedArrowDownOnSquare;
 
     public static function getNavigationGroup(): ?string
     {
@@ -52,9 +36,7 @@ class RestockResource extends Resource
 
     public static function getRelations(): array
     {
-        return [
-            //
-        ];
+        return [];
     }
 
     public static function getPages(): array
@@ -67,6 +49,9 @@ class RestockResource extends Resource
     public static function getEloquentQuery(): Builder
     {
         return parent::getEloquentQuery()
-            ->with('items.item');
+            ->with([
+                'items.item:id,name',
+                'logs',
+            ]);
     }
 }

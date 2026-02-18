@@ -124,9 +124,10 @@ return [
      * Icons to use for navigation
      */
     'icons' => [
-        'role_navigation' => 'heroicon-o-lock-closed',
-        'permission_navigation' => 'heroicon-o-lock-closed',
+        'role_navigation' => 'heroicon-o-shield-check',     // Roles
+        'permission_navigation' => 'heroicon-o-key',        // Permissions
     ],
+
 
     /*
      *  Navigation items order - int value, false  restores the default position

@@ -12,8 +12,6 @@ class ListItemVariants extends ListRecords
 
     protected function getHeaderActions(): array
     {
-        return [
-            
-        ];
+        return [];
     }
 }

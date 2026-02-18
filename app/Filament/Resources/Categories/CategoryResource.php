@@ -2,8 +2,6 @@
 
 namespace App\Filament\Resources\Categories;
 
-use App\Filament\Resources\Categories\Pages\CreateCategory;
-use App\Filament\Resources\Categories\Pages\EditCategory;
 use App\Filament\Resources\Categories\Pages\ListCategories;
 use App\Filament\Resources\Categories\Schemas\CategoryForm;
 use App\Filament\Resources\Categories\Tables\CategoriesTable;
@@ -18,16 +16,14 @@ class CategoryResource extends Resource
 {
     protected static ?string $model = Category::class;
 
-    protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedRectangleStack;
+    protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedTag;
+
+    protected static ?int $navigationSort = 3;
 
     public static function getNavigationGroup(): ?string
     {
         return 'Stock Management';
     }
-
-    protected static ?int $navigationSort = 3;
-
-    protected static ?string $recordTitleAttribute = 'Category';
 
     public static function form(Schema $schema): Schema
     {
@@ -41,17 +37,13 @@ class CategoryResource extends Resource
 
     public static function getRelations(): array
     {
-        return [
-            //
-        ];
+        return [];
     }
 
     public static function getPages(): array
     {
         return [
             'index' => ListCategories::route('/'),
-            'create' => CreateCategory::route('/create'),
-            'edit' => EditCategory::route('/{record}/edit'),
         ];
     }
 }

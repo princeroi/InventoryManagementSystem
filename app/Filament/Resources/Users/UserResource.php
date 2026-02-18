@@ -18,14 +18,14 @@ class UserResource extends Resource
 {
     protected static ?string $model = User::class;
 
-    protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedRectangleStack;
-
-    protected static ?string $recordTitleAttribute = 'Users';
+    protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedUserGroup;
 
     public static function getNavigationGroup(): ?string
     {
         return 'User Management';
     }
+
+    protected static ?string $recordTitleAttribute = 'users';
 
     public static function form(Schema $schema): Schema
     {

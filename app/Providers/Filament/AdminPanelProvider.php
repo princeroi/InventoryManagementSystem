@@ -11,7 +11,6 @@ use Filament\Panel;
 use Filament\PanelProvider;
 use Filament\Support\Colors\Color;
 use Filament\Widgets\AccountWidget;
-use Filament\Widgets\FilamentInfoWidget;
 use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
 use Illuminate\Cookie\Middleware\EncryptCookies;
 use Illuminate\Foundation\Http\Middleware\VerifyCsrfToken;
@@ -19,6 +18,10 @@ use Illuminate\Routing\Middleware\SubstituteBindings;
 use Illuminate\Session\Middleware\StartSession;
 use Illuminate\View\Middleware\ShareErrorsFromSession;
 use Althinect\FilamentSpatieRolesPermissions\FilamentSpatieRolesPermissionsPlugin;
+use App\Filament\Widgets\StatsOverviewWidget;
+use App\Filament\Widgets\LowStockWidget;
+use App\Filament\Widgets\RecentIssuancesWidget;
+use App\Filament\Widgets\RecentRestocksWidget;
 
 class AdminPanelProvider extends PanelProvider
 {
@@ -38,10 +41,11 @@ class AdminPanelProvider extends PanelProvider
             ->pages([
                 Dashboard::class,
             ])
-            ->discoverWidgets(in: app_path('Filament/Widgets'), for: 'App\Filament\Widgets')
             ->widgets([
-                AccountWidget::class,
-                FilamentInfoWidget::class,
+                StatsOverviewWidget::class,
+                LowStockWidget::class,
+                RecentIssuancesWidget::class,
+                RecentRestocksWidget::class,
             ])
             ->middleware([
                 EncryptCookies::class,
@@ -58,6 +62,5 @@ class AdminPanelProvider extends PanelProvider
                 Authenticate::class,
             ])
             ->plugin(FilamentSpatieRolesPermissionsPlugin::make());
-            
     }
 }

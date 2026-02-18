@@ -2,8 +2,6 @@
 
 namespace App\Filament\Resources\ItemVariants;
 
-use App\Filament\Resources\ItemVariants\Pages\CreateItemVariant;
-use App\Filament\Resources\ItemVariants\Pages\EditItemVariant;
 use App\Filament\Resources\ItemVariants\Pages\ListItemVariants;
 use App\Filament\Resources\ItemVariants\Schemas\ItemVariantForm;
 use App\Filament\Resources\ItemVariants\Tables\ItemVariantsTable;
@@ -13,14 +11,15 @@ use Filament\Resources\Resource;
 use Filament\Schemas\Schema;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Builder;
 
 class ItemVariantResource extends Resource
 {
     protected static ?string $model = ItemVariant::class;
 
-    protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedRectangleStack;
+    protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedClipboardDocumentList;
 
-    protected static ?string $recordTitleAttribute = 'Stock';
+    // Removed $recordTitleAttribute = 'Stock' — not a real model column
 
     protected static ?string $navigationLabel = 'Stocks';
 
@@ -28,12 +27,12 @@ class ItemVariantResource extends Resource
 
     protected static ?string $pluralModelLabel = 'Stocks';
 
+    protected static ?int $navigationSort = 2;
+
     public static function getNavigationGroup(): ?string
     {
         return 'Stock Management';
     }
-
-    protected static ?int $navigationSort = 2;
 
     public static function form(Schema $schema): Schema
     {
@@ -47,9 +46,7 @@ class ItemVariantResource extends Resource
 
     public static function getRelations(): array
     {
-        return [
-            //
-        ];
+        return [];
     }
 
     public static function getPages(): array
@@ -57,5 +54,12 @@ class ItemVariantResource extends Resource
         return [
             'index' => ListItemVariants::route('/'),
         ];
+    }
+
+    public static function getEloquentQuery(): Builder
+    {
+        // Eager load item so item.name column doesn't fire N+1 per row
+        return parent::getEloquentQuery()
+            ->with(['item:id,name']);
     }
 }

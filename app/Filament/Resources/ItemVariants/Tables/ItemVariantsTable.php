@@ -7,9 +7,6 @@ use Filament\Actions\DeleteBulkAction;
 use Filament\Actions\EditAction;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
-use Filament\Tables\Columns\BadgeColumn;
-use App\Models\IssuanceItem;
-use Carbon\Carbon;
 
 class ItemVariantsTable
 {

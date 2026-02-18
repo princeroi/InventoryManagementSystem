@@ -15,9 +15,45 @@ use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\Toggle;
 use Filament\Forms\Components\Placeholder;
 use Illuminate\Support\HtmlString;
+use Illuminate\Support\Collection;
 
 class IssuancesTable
 {
+    /**
+     * Build a keyed map of "item_id:size_label" => ItemVariant for a set of issuance items.
+     * One query instead of one-per-item.
+     */
+    private static function variantMap(iterable $issuanceItems): array
+    {
+        $pairs = collect($issuanceItems)->map(fn ($i) => [
+            'item_id' => $i->item_id,
+            'size'    => $i->size,
+        ])->unique()->values();
+
+        if ($pairs->isEmpty()) {
+            return [];
+        }
+
+        // Fetch all needed variants in a single query
+        $variants = ItemVariant::query()
+            ->where(function ($q) use ($pairs) {
+                foreach ($pairs as $p) {
+                    $q->orWhere(function ($inner) use ($p) {
+                        $inner->where('item_id', $p['item_id'])
+                              ->where('size_label', $p['size']);
+                    });
+                }
+            })
+            ->get();
+
+        $map = [];
+        foreach ($variants as $v) {
+            $map["{$v->item_id}:{$v->size_label}"] = $v;
+        }
+
+        return $map;
+    }
+
     public static function configure(Table $table): Table
     {
         return $table
@@ -92,14 +128,13 @@ class IssuancesTable
                         ->icon('heroicon-s-truck')
                         ->visible(fn ($record) => $record->status === 'pending')
                         ->action(function ($record) {
+                            $variantMap        = self::variantMap($record->items);
                             $insufficientItems = [];
 
                             foreach ($record->items as $issuanceItem) {
-                                $variant = ItemVariant::where('item_id', $issuanceItem->item_id)
-                                    ->where('size_label', $issuanceItem->size)
-                                    ->first();
-
-                                $stock = $variant?->quantity ?? 0;
+                                $key     = "{$issuanceItem->item_id}:{$issuanceItem->size}";
+                                $variant = $variantMap[$key] ?? null;
+                                $stock   = $variant?->quantity ?? 0;
 
                                 if ($issuanceItem->quantity > $stock) {
                                     $insufficientItems[] = "{$issuanceItem->item->name} ({$issuanceItem->size}): needs {$issuanceItem->quantity}, has {$stock}";
@@ -118,9 +153,8 @@ class IssuancesTable
                             }
 
                             foreach ($record->items as $issuanceItem) {
-                                $variant = ItemVariant::where('item_id', $issuanceItem->item_id)
-                                    ->where('size_label', $issuanceItem->size)
-                                    ->first();
+                                $key     = "{$issuanceItem->item_id}:{$issuanceItem->size}";
+                                $variant = $variantMap[$key] ?? null;
 
                                 if ($variant) {
                                     $variant->decrement('quantity', $issuanceItem->quantity);
@@ -191,7 +225,7 @@ class IssuancesTable
                                     ->suffix("/ {$issuanceItem->quantity}")
                                     ->helperText("Max returnable: {$issuanceItem->quantity}")
                                     ->visible(fn (callable $get) => (bool) $get('restore_stock'))
-                                    ->dehydrated(true); // always submit even when hidden
+                                    ->dehydrated(true);
                             }
 
                             return $fields;
@@ -211,7 +245,8 @@ class IssuancesTable
                             }
 
                             $record->load('items');
-                            $quantities = $data['quantities'] ?? [];
+                            $quantities  = $data['quantities'] ?? [];
+                            $variantMap  = self::variantMap($record->items);
 
                             foreach ($record->items as $index => $issuanceItem) {
                                 $quantityToReturn = (int) ($quantities[$index] ?? $issuanceItem->quantity);
@@ -220,9 +255,8 @@ class IssuancesTable
                                     continue;
                                 }
 
-                                $variant = ItemVariant::where('item_id', $issuanceItem->item_id)
-                                    ->where('size_label', $issuanceItem->size)
-                                    ->first();
+                                $key     = "{$issuanceItem->item_id}:{$issuanceItem->size}";
+                                $variant = $variantMap[$key] ?? null;
 
                                 if ($variant) {
                                     $variant->increment('quantity', $quantityToReturn);
@@ -277,6 +311,9 @@ class IssuancesTable
                         ->after(function ($record) use (&$cachedItems): void {
                             $record->items()->delete();
 
+                            $rows = [];
+                            $now  = now();
+
                             foreach ($cachedItems as $itemRow) {
                                 $itemId = $itemRow['item_id'] ?? null;
                                 if (! $itemId) continue;
@@ -287,94 +324,101 @@ class IssuancesTable
 
                                     if (! $size || ! $quantity) continue;
 
-                                    \App\Models\IssuanceItem::create([
+                                    $rows[] = [
                                         'issuance_id' => $record->id,
                                         'item_id'     => $itemId,
                                         'size'        => $size,
                                         'quantity'    => $quantity,
-                                    ]);
+                                        'created_at'  => $now,
+                                        'updated_at'  => $now,
+                                    ];
                                 }
+                            }
+
+                            if (! empty($rows)) {
+                                \App\Models\IssuanceItem::insert($rows);
                             }
                         }),
                 ]),
-                    Action::make('view_logs')
-    ->label('View Logs')
-    ->icon('heroicon-s-clock')
-    ->color('gray')
-    ->modalHeading('Issuance Activity Log')
-    ->modalSubmitAction(false)
-    ->modalCancelActionLabel('Close')
-    ->modalWidth('lg')
-    ->form(function ($record): array {
-        $logs = $record->logs;
 
-        if ($logs->isEmpty()) {
-            return [
-                Placeholder::make('no_logs')
-                    ->label('')
-                    ->content(new HtmlString("
-                        <div style='display:flex; flex-direction:column; align-items:center; justify-content:center; padding:32px 0; color:#9ca3af;'>
-                            <svg style='width:40px;height:40px;margin-bottom:8px;' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
-                                <path stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z'/>
-                            </svg>
-                            <span style='font-size:13px;'>No activity logs found.</span>
-                        </div>
-                    ")),
-            ];
-        }
+                Action::make('view_logs')
+                    ->label('View Logs')
+                    ->icon('heroicon-s-clock')
+                    ->color('gray')
+                    ->modalHeading('Issuance Activity Log')
+                    ->modalSubmitAction(false)
+                    ->modalCancelActionLabel('Close')
+                    ->modalWidth('lg')
+                    ->form(function ($record): array {
+                        // logs already eager-loaded via getEloquentQuery()
+                        $logs = $record->logs;
 
-        $config = [
-            'created'   => ['color' => '#6366f1', 'bg' => '#eef2ff', 'border' => '#c7d2fe', 'label' => 'Created',   'icon' => 'M12 4v16m8-8H4'],
-            'pending'   => ['color' => '#d97706', 'bg' => '#fffbeb', 'border' => '#fde68a', 'label' => 'Pending',   'icon' => 'M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z'],
-            'released'  => ['color' => '#2563eb', 'bg' => '#eff6ff', 'border' => '#bfdbfe', 'label' => 'Released',  'icon' => 'M5 13l4 4L19 7'],
-            'issued'    => ['color' => '#059669', 'bg' => '#ecfdf5', 'border' => '#a7f3d0', 'label' => 'Issued',    'icon' => 'M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z'],
-            'returned'  => ['color' => '#ea580c', 'bg' => '#fff7ed', 'border' => '#fed7aa', 'label' => 'Returned',  'icon' => 'M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15'],
-            'cancelled' => ['color' => '#dc2626', 'bg' => '#fef2f2', 'border' => '#fecaca', 'label' => 'Cancelled', 'icon' => 'M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z'],
-        ];
+                        if ($logs->isEmpty()) {
+                            return [
+                                Placeholder::make('no_logs')
+                                    ->label('')
+                                    ->content(new HtmlString("
+                                        <div style='display:flex; flex-direction:column; align-items:center; justify-content:center; padding:32px 0; color:#9ca3af;'>
+                                            <svg style='width:40px;height:40px;margin-bottom:8px;' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
+                                                <path stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z'/>
+                                            </svg>
+                                            <span style='font-size:13px;'>No activity logs found.</span>
+                                        </div>
+                                    ")),
+                            ];
+                        }
 
-        $logCount = $logs->count();
-        $fields   = [];
+                        $config = [
+                            'created'   => ['color' => '#6366f1', 'bg' => '#eef2ff', 'border' => '#c7d2fe', 'label' => 'Created',   'icon' => 'M12 4v16m8-8H4'],
+                            'pending'   => ['color' => '#d97706', 'bg' => '#fffbeb', 'border' => '#fde68a', 'label' => 'Pending',   'icon' => 'M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z'],
+                            'released'  => ['color' => '#2563eb', 'bg' => '#eff6ff', 'border' => '#bfdbfe', 'label' => 'Released',  'icon' => 'M5 13l4 4L19 7'],
+                            'issued'    => ['color' => '#059669', 'bg' => '#ecfdf5', 'border' => '#a7f3d0', 'label' => 'Issued',    'icon' => 'M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z'],
+                            'returned'  => ['color' => '#ea580c', 'bg' => '#fff7ed', 'border' => '#fed7aa', 'label' => 'Returned',  'icon' => 'M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15'],
+                            'cancelled' => ['color' => '#dc2626', 'bg' => '#fef2f2', 'border' => '#fecaca', 'label' => 'Cancelled', 'icon' => 'M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z'],
+                        ];
 
-        foreach ($logs as $i => $log) {
-            $c      = $config[$log->action] ?? $config['created'];
-            $date   = \Carbon\Carbon::parse($log->created_at)->format('M d, Y');
-            $time   = \Carbon\Carbon::parse($log->created_at)->format('h:i A');
-            $isLast = $i === $logCount - 1;
-            $line   = ! $isLast ? "<div style='width:2px; flex:1; background:#e5e7eb; margin-top:4px; min-height:20px;'></div>" : '';
-            $note   = $log->note ? "<div style='font-size:12px; color:#6b7280; margin-top:6px; padding-top:6px; border-top:1px solid {$c['border']};'>{$log->note}</div>" : '';
-            $pb     = $isLast ? '0' : '16px';
+                        $logCount = $logs->count();
+                        $fields   = [];
 
-            $fields[] = Placeholder::make("log_{$log->id}")
-                ->label('')
-                ->content(new HtmlString("
-                    <div style='display:flex; gap:16px;'>
-                        <div style='display:flex; flex-direction:column; align-items:center;'>
-                            <div style='width:36px; height:36px; background:{$c['bg']}; border:2px solid {$c['border']}; border-radius:50%; display:flex; align-items:center; justify-content:center; flex-shrink:0;'>
-                                <svg style='width:16px; height:16px; color:{$c['color']};' fill='none' stroke='{$c['color']}' viewBox='0 0 24 24'>
-                                    <path stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='{$c['icon']}'/>
-                                </svg>
-                            </div>
-                            {$line}
-                        </div>
-                        <div style='flex:1; padding-bottom:{$pb};'>
-                            <div style='background:{$c['bg']}; border:1px solid {$c['border']}; border-radius:8px; padding:12px 14px;'>
-                                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;'>
-                                    <span style='font-size:13px; font-weight:600; color:{$c['color']};'>{$c['label']}</span>
-                                    <span style='font-size:11px; color:#9ca3af;'>{$date} · {$time}</span>
-                                </div>
-                                <div style='font-size:12px; color:#6b7280;'>
-                                    By: <strong style='color:#374151;'>{$log->performed_by}</strong>
-                                </div>
-                                {$note}
-                            </div>
-                        </div>
-                    </div>
-                "));
-        }
+                        foreach ($logs as $i => $log) {
+                            $c      = $config[$log->action] ?? $config['created'];
+                            $date   = \Carbon\Carbon::parse($log->created_at)->format('M d, Y');
+                            $time   = \Carbon\Carbon::parse($log->created_at)->format('h:i A');
+                            $isLast = $i === $logCount - 1;
+                            $line   = ! $isLast ? "<div style='width:2px; flex:1; background:#e5e7eb; margin-top:4px; min-height:20px;'></div>" : '';
+                            $note   = $log->note ? "<div style='font-size:12px; color:#6b7280; margin-top:6px; padding-top:6px; border-top:1px solid {$c['border']};'>{$log->note}</div>" : '';
+                            $pb     = $isLast ? '0' : '16px';
 
-        return $fields;
-    }),
-                
+                            $fields[] = Placeholder::make("log_{$log->id}")
+                                ->label('')
+                                ->content(new HtmlString("
+                                    <div style='display:flex; gap:16px;'>
+                                        <div style='display:flex; flex-direction:column; align-items:center;'>
+                                            <div style='width:36px; height:36px; background:{$c['bg']}; border:2px solid {$c['border']}; border-radius:50%; display:flex; align-items:center; justify-content:center; flex-shrink:0;'>
+                                                <svg style='width:16px; height:16px; color:{$c['color']};' fill='none' stroke='{$c['color']}' viewBox='0 0 24 24'>
+                                                    <path stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='{$c['icon']}'/>
+                                                </svg>
+                                            </div>
+                                            {$line}
+                                        </div>
+                                        <div style='flex:1; padding-bottom:{$pb};'>
+                                            <div style='background:{$c['bg']}; border:1px solid {$c['border']}; border-radius:8px; padding:12px 14px;'>
+                                                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;'>
+                                                    <span style='font-size:13px; font-weight:600; color:{$c['color']};'>{$c['label']}</span>
+                                                    <span style='font-size:11px; color:#9ca3af;'>{$date} · {$time}</span>
+                                                </div>
+                                                <div style='font-size:12px; color:#6b7280;'>
+                                                    By: <strong style='color:#374151;'>{$log->performed_by}</strong>
+                                                </div>
+                                                {$note}
+                                            </div>
+                                        </div>
+                                    </div>
+                                "));
+                        }
+
+                        return $fields;
+                    }),
             ])
             ->toolbarActions([
                 BulkActionGroup::make([
@@ -389,18 +433,23 @@ class IssuancesTable
                             $records->where('status', '!=', 'pending')->count() . ' record(s) will be skipped.'
                         )
                         ->action(function ($records) {
+                            $pendingRecords = $records->where('status', 'pending');
+
+                            // Collect ALL issuance items across all pending records, then
+                            // fetch variants in ONE query instead of one per item per record.
+                            $allItems = $pendingRecords->flatMap(fn ($r) => $r->items);
+                            $variantMap = self::variantMap($allItems);
+
                             $skipped  = [];
                             $released = 0;
 
-                            foreach ($records->where('status', 'pending') as $record) {
+                            foreach ($pendingRecords as $record) {
                                 $insufficientItems = [];
 
                                 foreach ($record->items as $issuanceItem) {
-                                    $variant = ItemVariant::where('item_id', $issuanceItem->item_id)
-                                        ->where('size_label', $issuanceItem->size)
-                                        ->first();
-
-                                    $stock = $variant?->quantity ?? 0;
+                                    $key     = "{$issuanceItem->item_id}:{$issuanceItem->size}";
+                                    $variant = $variantMap[$key] ?? null;
+                                    $stock   = $variant?->quantity ?? 0;
 
                                     if ($issuanceItem->quantity > $stock) {
                                         $insufficientItems[] = "{$issuanceItem->item->name} ({$issuanceItem->size}): needs {$issuanceItem->quantity}, has {$stock}";
@@ -413,12 +462,14 @@ class IssuancesTable
                                 }
 
                                 foreach ($record->items as $issuanceItem) {
-                                    $variant = ItemVariant::where('item_id', $issuanceItem->item_id)
-                                        ->where('size_label', $issuanceItem->size)
-                                        ->first();
+                                    $key     = "{$issuanceItem->item_id}:{$issuanceItem->size}";
+                                    $variant = $variantMap[$key] ?? null;
 
                                     if ($variant) {
                                         $variant->decrement('quantity', $issuanceItem->quantity);
+                                        // Keep the in-memory map in sync so subsequent
+                                        // records see the updated stock level.
+                                        $variant->quantity -= $issuanceItem->quantity;
                                     }
                                 }
 
@@ -483,7 +534,7 @@ class IssuancesTable
                         ->icon('heroicon-s-arrow-path')
                         ->modalHeading('Bulk Return Issuances')
                         ->modalSubmitActionLabel('Confirm Return')
-                        ->form(function (): array {  // <-- removed `use (&$records)`
+                        ->form(function (): array {
                             return [
                                 Placeholder::make('skip_notice')
                                     ->label('')
@@ -523,29 +574,40 @@ class IssuancesTable
                             ];
                         })
                         ->action(function ($records, array $data) {
-                            $returned      = 0;
-                            $restoreStock  = (bool) ($data['restore_stock'] ?? true);
+                            $releasedRecords = $records->where('status', 'released');
+                            $restoreStock    = (bool) ($data['restore_stock'] ?? true);
+                            $returned        = 0;
 
-                            foreach ($records->where('status', 'released') as $record) {
-                                $record->updateQuietly([
-                                    'status'      => 'returned',
-                                    'returned_at' => now(),
-                                ]);
+                            if ($restoreStock) {
+                                // Single variant map for all records
+                                $allItems   = $releasedRecords->flatMap(fn ($r) => $r->load('items')->items);
+                                $variantMap = self::variantMap($allItems);
 
-                                if ($restoreStock) {
-                                    // Fresh load to avoid stale relationship cache
-                                    foreach ($record->load('items')->items as $issuanceItem) {
-                                        $variant = ItemVariant::where('item_id', $issuanceItem->item_id)
-                                            ->where('size_label', $issuanceItem->size)
-                                            ->first();
+                                foreach ($releasedRecords as $record) {
+                                    $record->updateQuietly([
+                                        'status'      => 'returned',
+                                        'returned_at' => now(),
+                                    ]);
+
+                                    foreach ($record->items as $issuanceItem) {
+                                        $key     = "{$issuanceItem->item_id}:{$issuanceItem->size}";
+                                        $variant = $variantMap[$key] ?? null;
 
                                         if ($variant) {
                                             $variant->increment('quantity', $issuanceItem->quantity);
                                         }
                                     }
-                                }
 
-                                $returned++;
+                                    $returned++;
+                                }
+                            } else {
+                                foreach ($releasedRecords as $record) {
+                                    $record->updateQuietly([
+                                        'status'      => 'returned',
+                                        'returned_at' => now(),
+                                    ]);
+                                    $returned++;
+                                }
                             }
 
                             $stockMsg = $restoreStock ? 'Stock restored.' : 'Stock not restored.';

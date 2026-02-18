@@ -3,43 +3,72 @@
 namespace App\Filament\Resources\Restocks\Tables;
 
 use Filament\Actions\BulkActionGroup;
-use Filament\Actions\DeleteBulkAction;
 use Filament\Actions\EditAction;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
-
 use App\Models\ItemVariant;
-
 use Filament\Actions\ActionGroup;
 use Filament\Actions\Action;
 use Filament\Actions\BulkAction;
 use Filament\Notifications\Notification;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\Placeholder;
-use Filament\Schemas\Components\Grid;
 use Illuminate\Support\HtmlString;
 
 class RestocksTable
 {
+    /**
+     * Build a keyed map of "item_id:size_label" => ItemVariant in one query.
+     */
+    private static function variantMap(iterable $items): array
+    {
+        $pairs = collect($items)->map(fn ($i) => [
+            'item_id' => $i->item_id,
+            'size'    => $i->size,
+        ])->unique()->values();
+
+        if ($pairs->isEmpty()) {
+            return [];
+        }
+
+        $variants = ItemVariant::query()
+            ->where(function ($q) use ($pairs) {
+                foreach ($pairs as $p) {
+                    $q->orWhere(function ($inner) use ($p) {
+                        $inner->where('item_id', $p['item_id'])
+                              ->where('size_label', $p['size']);
+                    });
+                }
+            })
+            ->get();
+
+        $map = [];
+        foreach ($variants as $v) {
+            $map["{$v->item_id}:{$v->size_label}"] = $v;
+        }
+
+        return $map;
+    }
+
     public static function configure(Table $table): Table
     {
         return $table
-        ->defaultSort(function ($query) {
-            $query->orderByRaw("
-                COALESCE(
-                    CASE status
-                        WHEN 'pending'   THEN ordered_at
-                        WHEN 'delivered' THEN delivered_at
-                        WHEN 'partial'   THEN partial_at
-                        WHEN 'returned'  THEN returned_at
-                        WHEN 'cancelled' THEN cancelled_at
-                        ELSE NULL
-                    END,
-                    DATE(created_at)
-                ) DESC
-            ")
-            ->orderBy('updated_at', 'desc');
-        })
+            ->defaultSort(function ($query) {
+                $query->orderByRaw("
+                    COALESCE(
+                        CASE status
+                            WHEN 'pending'   THEN ordered_at
+                            WHEN 'delivered' THEN delivered_at
+                            WHEN 'partial'   THEN partial_at
+                            WHEN 'returned'  THEN returned_at
+                            WHEN 'cancelled' THEN cancelled_at
+                            ELSE NULL
+                        END,
+                        DATE(created_at)
+                    ) DESC
+                ")
+                ->orderBy('updated_at', 'desc');
+            })
             ->columns([
                 TextColumn::make('supplier_name')
                     ->label('Supplier')
@@ -80,11 +109,7 @@ class RestocksTable
                     ->label('Items')
                     ->html(),
 
-                TextColumn::make('note')
-                    ->label('Note')
-                    ->limit(50)
-                    ->toggleable(isToggledHiddenByDefault: true),
-
+                // Removed duplicate — kept only the formatted version
                 TextColumn::make('note')
                     ->label('Note')
                     ->formatStateUsing(fn ($state) => $state ?: 'No Note')
@@ -104,12 +129,10 @@ class RestocksTable
                             $fields = [];
 
                             foreach ($record->items as $index => $restockItem) {
-                                $itemName = $restockItem->item?->name ?? "Item #{$restockItem->item_id}";
-                                $size     = $restockItem->size;
-                                $label    = $size ? "{$itemName} ({$size})" : $itemName;
-
-                                // Use remaining_quantity if set (partial), otherwise use full quantity
-                                $maxQty     = $restockItem->remaining_quantity ?? $restockItem->quantity;
+                                $itemName     = $restockItem->item?->name ?? "Item #{$restockItem->item_id}";
+                                $size         = $restockItem->size;
+                                $label        = $size ? "{$itemName} ({$size})" : $itemName;
+                                $maxQty       = $restockItem->remaining_quantity ?? $restockItem->quantity;
                                 $totalOrdered = $restockItem->quantity;
 
                                 $fields[] = TextInput::make("quantities.{$index}")
@@ -131,15 +154,12 @@ class RestocksTable
                             $allDelivered = true;
 
                             $record->load('items');
+                            $variantMap = self::variantMap($record->items);
 
                             foreach ($record->items as $index => $restockItem) {
                                 $deliveredQty = (int) ($quantities[$index] ?? 0);
-
-                                // Max deliverable this round
-                                $maxQty    = $restockItem->remaining_quantity ?? $restockItem->quantity;
-                                $delivered = min($deliveredQty, $maxQty);
-
-                                // Calculate new remaining
+                                $maxQty       = $restockItem->remaining_quantity ?? $restockItem->quantity;
+                                $delivered    = min($deliveredQty, $maxQty);
                                 $newRemaining = $maxQty - $delivered;
 
                                 $restockItem->update([
@@ -151,9 +171,8 @@ class RestocksTable
                                     $allDelivered = false;
                                 }
 
-                                $variant = ItemVariant::where('item_id', $restockItem->item_id)
-                                    ->where('size_label', $restockItem->size)
-                                    ->first();
+                                $key     = "{$restockItem->item_id}:{$restockItem->size}";
+                                $variant = $variantMap[$key] ?? null;
 
                                 if ($variant && $delivered > 0) {
                                     $variant->increment('quantity', $delivered);
@@ -164,7 +183,9 @@ class RestocksTable
                                 'status' => $allDelivered ? 'delivered' : 'partial',
                             ]);
 
-                            $msg = $allDelivered ? 'Fully delivered and stock updated.' : 'Partially delivered and stock updated.';
+                            $msg = $allDelivered
+                                ? 'Fully delivered and stock updated.'
+                                : 'Partially delivered and stock updated.';
 
                             Notification::make()->title($msg)->success()->send();
                         }),
@@ -212,15 +233,15 @@ class RestocksTable
 
                             $record->load('items');
                             $quantities = $data['quantities'] ?? [];
+                            $variantMap = self::variantMap($record->items);
 
                             foreach ($record->items as $index => $restockItem) {
                                 $quantityToReturn = (int) ($quantities[$index] ?? $restockItem->quantity);
 
                                 if ($quantityToReturn <= 0) continue;
 
-                                $variant = ItemVariant::where('item_id', $restockItem->item_id)
-                                    ->where('size_label', $restockItem->size)
-                                    ->first();
+                                $key     = "{$restockItem->item_id}:{$restockItem->size}";
+                                $variant = $variantMap[$key] ?? null;
 
                                 if ($variant) {
                                     $variant->decrement('quantity', $quantityToReturn);
@@ -229,6 +250,7 @@ class RestocksTable
 
                             Notification::make()->title('Restock returned and stock adjusted.')->warning()->send();
                         }),
+
                     Action::make('cancel')
                         ->label('Cancel')
                         ->color('danger')
@@ -272,6 +294,10 @@ class RestocksTable
                         ->after(function ($record) use (&$cachedItems): void {
                             $record->items()->delete();
 
+                            // Bulk insert instead of looped create
+                            $rows = [];
+                            $now  = now();
+
                             foreach ($cachedItems ?? [] as $itemRow) {
                                 $itemId = $itemRow['item_id'] ?? null;
                                 if (! $itemId) continue;
@@ -282,13 +308,19 @@ class RestocksTable
 
                                     if (! $size || ! $quantity) continue;
 
-                                    \App\Models\RestockItem::create([
+                                    $rows[] = [
                                         'restock_id' => $record->id,
                                         'item_id'    => $itemId,
                                         'size'       => $size,
                                         'quantity'   => $quantity,
-                                    ]);
+                                        'created_at' => $now,
+                                        'updated_at' => $now,
+                                    ];
                                 }
+                            }
+
+                            if (! empty($rows)) {
+                                \App\Models\RestockItem::insert($rows);
                             }
                         }),
                 ]),
@@ -302,6 +334,7 @@ class RestocksTable
                     ->modalCancelActionLabel('Close')
                     ->modalWidth('lg')
                     ->form(function ($record): array {
+                        // logs already eager-loaded via getEloquentQuery()
                         $logs = $record->logs;
 
                         if ($logs->isEmpty()) {
@@ -382,15 +415,21 @@ class RestocksTable
                             $records->where('status', '!=', 'pending')->count() . ' record(s) will be skipped.'
                         )
                         ->action(function ($records) {
+                            $pendingRecords = $records->where('status', 'pending');
+
+                            // Single variant map for all records
+                            $allItems   = $pendingRecords->flatMap(fn ($r) => $r->items);
+                            $variantMap = self::variantMap($allItems);
+
                             $delivered = 0;
 
-                            foreach ($records->where('status', 'pending') as $record) {
+                            foreach ($pendingRecords as $record) {
                                 $record->update(['status' => 'delivered']);
 
                                 foreach ($record->items as $restockItem) {
-                                    $variant = ItemVariant::where('item_id', $restockItem->item_id)
-                                        ->where('size_label', $restockItem->size)
-                                        ->first();
+                                    $key     = "{$restockItem->item_id}:{$restockItem->size}";
+                                    $variant = $variantMap[$key] ?? null;
+
                                     if ($variant) {
                                         $variant->increment('quantity', $restockItem->quantity);
                                     }

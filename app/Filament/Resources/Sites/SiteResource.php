@@ -18,9 +18,9 @@ class SiteResource extends Resource
 {
     protected static ?string $model = Site::class;
 
-    protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedRectangleStack;
+    protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedMapPin;
 
-    protected static ?string $recordTitleAttribute = 'Site';
+    // Removed $recordTitleAttribute = 'Site' — 'Site' is not a model column
 
     public static function getNavigationGroup(): ?string
     {
@@ -39,17 +39,13 @@ class SiteResource extends Resource
 
     public static function getRelations(): array
     {
-        return [
-            //
-        ];
+        return [];
     }
 
     public static function getPages(): array
     {
         return [
-            'index' => ListSites::route('/'),
-            'create' => CreateSite::route('/create'),
-            'edit' => EditSite::route('/{record}/edit'),
+            'index'  => ListSites::route('/'),
         ];
     }
 }

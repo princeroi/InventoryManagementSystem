@@ -4,10 +4,8 @@ namespace App\Filament\Resources\Items\Pages;
 
 use App\Filament\Resources\Items\ItemResource;
 use App\Models\Category;
-use App\Models\Item;
 use Filament\Actions\CreateAction;
 use Filament\Resources\Pages\ListRecords;
-use Filament\Tables;
 use Filament\Tables\Filters\SelectFilter;
 
 class ListItems extends ListRecords
@@ -16,8 +14,8 @@ class ListItems extends ListRecords
 
     protected function getTableFilters(): array
     {
-        // Get categories as id => name
-        $categories = Category::withCount('items')->get()->pluck('name', 'id');
+        $categories = Category::orderBy('name')
+            ->pluck('name', 'id');
 
         return [
             SelectFilter::make('category_id')
@@ -38,8 +36,4 @@ class ListItems extends ListRecords
         ];
     }
 
-    protected function getTableQuery(): \Illuminate\Database\Eloquent\Builder
-    {
-        return Item::query()->with('category', 'itemVariants');
-    }
 }

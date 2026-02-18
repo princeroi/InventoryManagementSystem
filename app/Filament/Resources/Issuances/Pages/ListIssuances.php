@@ -9,10 +9,26 @@ use Filament\Resources\Pages\ListRecords;
 use Filament\Schemas\Components\Tabs;
 use Filament\Schemas\Components\Tabs\Tab;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Facades\DB;
 
 class ListIssuances extends ListRecords
 {
     protected static string $resource = IssuanceResource::class;
+    protected function getStatusCounts(): array
+    {
+        $rows = Issuance::query()
+            ->select('status', DB::raw('count(*) as total'))
+            ->groupBy('status')
+            ->pluck('total', 'status')
+            ->toArray();
+
+        $total = array_sum($rows);
+
+        return array_merge(
+            ['all' => $total],
+            $rows
+        );
+    }
 
     protected function getHeaderActions(): array
     {
@@ -26,6 +42,10 @@ class ListIssuances extends ListRecords
                     return $data;
                 })
                 ->after(function ($record) use (&$cachedItems): void {
+                    // Bulk-insert all issuance items in one go instead of looping creates
+                    $rows = [];
+                    $now  = now();
+
                     foreach ($cachedItems as $itemRow) {
                         $itemId = $itemRow['item_id'] ?? null;
                         if (! $itemId) continue;
@@ -36,13 +56,19 @@ class ListIssuances extends ListRecords
 
                             if (! $size || ! $quantity) continue;
 
-                            \App\Models\IssuanceItem::create([
+                            $rows[] = [
                                 'issuance_id' => $record->id,
                                 'item_id'     => $itemId,
                                 'size'        => $size,
                                 'quantity'    => $quantity,
-                            ]);
+                                'created_at'  => $now,
+                                'updated_at'  => $now,
+                            ];
                         }
+                    }
+
+                    if (! empty($rows)) {
+                        \App\Models\IssuanceItem::insert($rows);
                     }
                 }),
         ];
@@ -50,32 +76,34 @@ class ListIssuances extends ListRecords
 
     public function getTabs(): array
     {
+        $counts = $this->getStatusCounts();
+
         return [
             'all' => Tab::make('All')
-                ->badge(Issuance::count()),
+                ->badge($counts['all'] ?? 0),
 
             'pending' => Tab::make('Pending')
-                ->badge(Issuance::where('status', 'pending')->count())
+                ->badge($counts['pending'] ?? 0)
                 ->badgeColor('warning')
                 ->modifyQueryUsing(fn (Builder $query) => $query->where('status', 'pending')),
 
             'released' => Tab::make('Released')
-                ->badge(Issuance::where('status', 'released')->count())
+                ->badge($counts['released'] ?? 0)
                 ->badgeColor('info')
                 ->modifyQueryUsing(fn (Builder $query) => $query->where('status', 'released')),
 
             'issued' => Tab::make('Issued')
-                ->badge(Issuance::where('status', 'issued')->count())
+                ->badge($counts['issued'] ?? 0)
                 ->badgeColor('success')
                 ->modifyQueryUsing(fn (Builder $query) => $query->where('status', 'issued')),
 
             'returned' => Tab::make('Returned')
-                ->badge(Issuance::where('status', 'returned')->count())
+                ->badge($counts['returned'] ?? 0)
                 ->badgeColor('gray')
                 ->modifyQueryUsing(fn (Builder $query) => $query->where('status', 'returned')),
 
             'cancelled' => Tab::make('Cancelled')
-                ->badge(Issuance::where('status', 'cancelled')->count())
+                ->badge($counts['cancelled'] ?? 0)
                 ->badgeColor('danger')
                 ->modifyQueryUsing(fn (Builder $query) => $query->where('status', 'cancelled')),
         ];

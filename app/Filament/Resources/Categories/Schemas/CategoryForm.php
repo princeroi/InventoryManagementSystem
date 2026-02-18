@@ -11,9 +11,11 @@ class CategoryForm
     public static function configure(Schema $schema): Schema
     {
         return $schema
+            ->columns(2)
             ->components([
                 TextInput::make('name')
                     ->required(),
+
                 Textarea::make('description')
                     ->default(null)
                     ->columnSpanFull(),
