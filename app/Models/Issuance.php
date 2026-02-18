@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use App\Models\IssuanceLog;
 
 class Issuance extends Model
 {
@@ -17,6 +18,7 @@ class Issuance extends Model
         'issued_at',
         'returned_at',
         'cancelled_at',
+        'note',
     ];
 
     protected $casts = [
@@ -77,5 +79,42 @@ class Issuance extends Model
                 }
             }
         });
+
+        // Log on create
+        static::created(function (self $issuance) {
+
+            $action = match ($issuance->status) {
+                    'pending'   => 'pending',
+                    'released'  => 'released',
+                    'issued'    => 'issued',
+                    'returned'  => 'returned',
+                    'cancelled' => 'cancelled',
+                    default     => 'created',
+                };
+
+            
+            IssuanceLog::create([
+                'issuance_id'  => $issuance->id,
+                'action'       => $action,
+                'performed_by' => auth()->user()?->name ?? 'System',
+                'note'         => null,
+            ]);
+        });
+
+        static::updated(function (self $issuance) {
+            if (! $issuance->isDirty('status')) return;
+
+            IssuanceLog::create([
+                'issuance_id'  => $issuance->id,
+                'action'       => $issuance->status,
+                'performed_by' => auth()->user()?->name ?? 'System',
+                'note'         => null,
+            ]);
+        });
+    }
+
+    public function logs(): HasMany
+    {
+        return $this->hasMany(IssuanceLog::class)->orderBy('created_at', 'desc');
     }
 }

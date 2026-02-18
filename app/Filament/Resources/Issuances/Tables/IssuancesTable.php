@@ -21,7 +21,23 @@ class IssuancesTable
     public static function configure(Table $table): Table
     {
         return $table
-            ->defaultSort('created_at', 'desc')
+            ->defaultSort(function ($query) {
+                $query->orderByRaw("
+                    COALESCE(
+                        CASE status
+                            WHEN 'pending'   THEN pending_at
+                            WHEN 'released'  THEN released_at
+                            WHEN 'issued'    THEN issued_at
+                            WHEN 'returned'  THEN returned_at
+                            WHEN 'cancelled' THEN cancelled_at
+                            ELSE NULL
+                        END,
+                        DATE(created_at)
+                    ) DESC
+                ")
+                ->orderBy('updated_at', 'desc');
+            })
+
             ->columns([
                 TextColumn::make('site.name')
                     ->label('Site')
@@ -59,6 +75,11 @@ class IssuancesTable
                 TextColumn::make('item_ids')
                     ->label('Items')
                     ->html(),
+
+                TextColumn::make('note')
+                    ->label('Note')
+                    ->formatStateUsing(fn ($state) => $state ?: 'No Note')
+                    ->limit(50),
             ])
             ->filters([])
             ->recordActions([
@@ -227,8 +248,133 @@ class IssuancesTable
                         ->requiresConfirmation(),
 
                     EditAction::make()
-                        ->visible(fn ($record) => $record->status === 'pending'),
+                        ->visible(fn ($record) => $record->status === 'pending')
+                        ->fillForm(function ($record): array {
+                            $grouped = [];
+
+                            foreach ($record->items as $issuanceItem) {
+                                $itemId = $issuanceItem->item_id;
+
+                                if (! isset($grouped[$itemId])) {
+                                    $grouped[$itemId] = ['item_id' => $itemId, 'sizes' => []];
+                                }
+
+                                $grouped[$itemId]['sizes'][] = [
+                                    'size'     => $issuanceItem->size,
+                                    'quantity' => $issuanceItem->quantity,
+                                ];
+                            }
+
+                            return array_merge($record->toArray(), [
+                                'issuance_items' => array_values($grouped),
+                            ]);
+                        })
+                        ->mutateFormDataUsing(function (array $data) use (&$cachedItems): array {
+                            $cachedItems = $data['issuance_items'] ?? [];
+                            unset($data['issuance_items']);
+                            return $data;
+                        })
+                        ->after(function ($record) use (&$cachedItems): void {
+                            $record->items()->delete();
+
+                            foreach ($cachedItems as $itemRow) {
+                                $itemId = $itemRow['item_id'] ?? null;
+                                if (! $itemId) continue;
+
+                                foreach ($itemRow['sizes'] ?? [] as $sizeRow) {
+                                    $size     = $sizeRow['size'] ?? null;
+                                    $quantity = $sizeRow['quantity'] ?? null;
+
+                                    if (! $size || ! $quantity) continue;
+
+                                    \App\Models\IssuanceItem::create([
+                                        'issuance_id' => $record->id,
+                                        'item_id'     => $itemId,
+                                        'size'        => $size,
+                                        'quantity'    => $quantity,
+                                    ]);
+                                }
+                            }
+                        }),
                 ]),
+                    Action::make('view_logs')
+    ->label('View Logs')
+    ->icon('heroicon-s-clock')
+    ->color('gray')
+    ->modalHeading('Issuance Activity Log')
+    ->modalSubmitAction(false)
+    ->modalCancelActionLabel('Close')
+    ->modalWidth('lg')
+    ->form(function ($record): array {
+        $logs = $record->logs;
+
+        if ($logs->isEmpty()) {
+            return [
+                Placeholder::make('no_logs')
+                    ->label('')
+                    ->content(new HtmlString("
+                        <div style='display:flex; flex-direction:column; align-items:center; justify-content:center; padding:32px 0; color:#9ca3af;'>
+                            <svg style='width:40px;height:40px;margin-bottom:8px;' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
+                                <path stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z'/>
+                            </svg>
+                            <span style='font-size:13px;'>No activity logs found.</span>
+                        </div>
+                    ")),
+            ];
+        }
+
+        $config = [
+            'created'   => ['color' => '#6366f1', 'bg' => '#eef2ff', 'border' => '#c7d2fe', 'label' => 'Created',   'icon' => 'M12 4v16m8-8H4'],
+            'pending'   => ['color' => '#d97706', 'bg' => '#fffbeb', 'border' => '#fde68a', 'label' => 'Pending',   'icon' => 'M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z'],
+            'released'  => ['color' => '#2563eb', 'bg' => '#eff6ff', 'border' => '#bfdbfe', 'label' => 'Released',  'icon' => 'M5 13l4 4L19 7'],
+            'issued'    => ['color' => '#059669', 'bg' => '#ecfdf5', 'border' => '#a7f3d0', 'label' => 'Issued',    'icon' => 'M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z'],
+            'returned'  => ['color' => '#ea580c', 'bg' => '#fff7ed', 'border' => '#fed7aa', 'label' => 'Returned',  'icon' => 'M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15'],
+            'cancelled' => ['color' => '#dc2626', 'bg' => '#fef2f2', 'border' => '#fecaca', 'label' => 'Cancelled', 'icon' => 'M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z'],
+        ];
+
+        $logCount = $logs->count();
+        $fields   = [];
+
+        foreach ($logs as $i => $log) {
+            $c      = $config[$log->action] ?? $config['created'];
+            $date   = \Carbon\Carbon::parse($log->created_at)->format('M d, Y');
+            $time   = \Carbon\Carbon::parse($log->created_at)->format('h:i A');
+            $isLast = $i === $logCount - 1;
+            $line   = ! $isLast ? "<div style='width:2px; flex:1; background:#e5e7eb; margin-top:4px; min-height:20px;'></div>" : '';
+            $note   = $log->note ? "<div style='font-size:12px; color:#6b7280; margin-top:6px; padding-top:6px; border-top:1px solid {$c['border']};'>{$log->note}</div>" : '';
+            $pb     = $isLast ? '0' : '16px';
+
+            $fields[] = Placeholder::make("log_{$log->id}")
+                ->label('')
+                ->content(new HtmlString("
+                    <div style='display:flex; gap:16px;'>
+                        <div style='display:flex; flex-direction:column; align-items:center;'>
+                            <div style='width:36px; height:36px; background:{$c['bg']}; border:2px solid {$c['border']}; border-radius:50%; display:flex; align-items:center; justify-content:center; flex-shrink:0;'>
+                                <svg style='width:16px; height:16px; color:{$c['color']};' fill='none' stroke='{$c['color']}' viewBox='0 0 24 24'>
+                                    <path stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='{$c['icon']}'/>
+                                </svg>
+                            </div>
+                            {$line}
+                        </div>
+                        <div style='flex:1; padding-bottom:{$pb};'>
+                            <div style='background:{$c['bg']}; border:1px solid {$c['border']}; border-radius:8px; padding:12px 14px;'>
+                                <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;'>
+                                    <span style='font-size:13px; font-weight:600; color:{$c['color']};'>{$c['label']}</span>
+                                    <span style='font-size:11px; color:#9ca3af;'>{$date} · {$time}</span>
+                                </div>
+                                <div style='font-size:12px; color:#6b7280;'>
+                                    By: <strong style='color:#374151;'>{$log->performed_by}</strong>
+                                </div>
+                                {$note}
+                            </div>
+                        </div>
+                    </div>
+                "));
+        }
+
+        return $fields;
+    }),
+                
             ])
             ->toolbarActions([
                 BulkActionGroup::make([

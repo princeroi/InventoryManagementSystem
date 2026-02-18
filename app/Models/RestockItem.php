@@ -12,6 +12,8 @@ class RestockItem extends Model
         'item_id',
         'size',
         'quantity',
+        'delivered_quantity',
+        'remaining_quantity',
     ];
 
     public function restock(): BelongsTo

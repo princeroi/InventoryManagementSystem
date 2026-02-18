@@ -27,19 +27,54 @@ class RestockForm
                     ->label('Ordered By')
                     ->required(),
 
-                DatePicker::make('ordered_at')
-                    ->label('Ordered Date')
-                    ->required()
-                    ->default(today()),
-
                 Select::make('status')
                     ->options([
                         'pending'   => 'Pending',
                         'delivered' => 'Delivered',
+                        'partial'   => 'Partial',
                         'returned'  => 'Returned',
+                        'cancelled' => 'Cancelled',
                     ])
                     ->default('pending')
+                    ->live()
+                    ->afterStateUpdated(function (callable $set, $state) {
+                        $now = now()->toDateString();
+                        match ($state) {
+                            'pending'   => $set('ordered_at', $now),
+                            'delivered' => $set('delivered_at', $now),
+                            'partial'   => $set('partial_at', $now),
+                            'returned'  => $set('returned_at', $now),
+                            'cancelled' => $set('cancelled_at', $now),
+                            default     => null,
+                        };
+                    })
                     ->required(),
+
+                DatePicker::make('ordered_at')
+                    ->label('Ordered Date')
+                    ->default(today())
+                    ->visible(fn (callable $get) => $get('status') === 'pending')
+                    ->required(fn (callable $get) => $get('status') === 'pending'),
+
+                DatePicker::make('delivered_at')
+                    ->label('Delivered Date')
+                    ->visible(fn (callable $get) => $get('status') === 'delivered')
+                    ->required(fn (callable $get) => $get('status') === 'delivered'),
+
+                DatePicker::make('partial_at')
+                    ->label('Partial Date')
+                    ->visible(fn (callable $get) => $get('status') === 'partial')
+                    ->required(fn (callable $get) => $get('status') === 'partial'),
+
+                DatePicker::make('returned_at')
+                    ->label('Returned Date')
+                    ->visible(fn (callable $get) => $get('status') === 'returned')
+                    ->required(fn (callable $get) => $get('status') === 'returned'),
+
+                DatePicker::make('cancelled_at')
+                    ->label('Cancelled Date')
+                    ->visible(fn (callable $get) => $get('status') === 'cancelled')
+                    ->required(fn (callable $get) => $get('status') === 'cancelled'),
 
                 Textarea::make('note')
                     ->label('Note')
@@ -50,19 +85,38 @@ class RestockForm
                     ->label('Items')
                     ->schema([
                        Select::make('item_id')
-                        ->label('Item')
-                        ->options(fn () => \App\Models\Item::pluck('name', 'id')->toArray())
-                        ->searchable()
-                        ->preload()
-                        ->reactive()
-                        ->afterStateUpdated(function (callable $set, $state) {
-                            $set('sizes', []);
-                            if ($state) {
+                            ->label('Item')
+                            ->options(fn () => \App\Models\Item::pluck('name', 'id')->toArray())
+                            ->searchable()
+                            ->preload()
+                            ->reactive()
+                            ->afterStateUpdated(function (callable $get, callable $set, $state) {
+                                if (! $state) return;
+
+                                // Check for duplicate item in outer repeater
+                                $allItems = $get('../../items') ?? [];
+
+                                $duplicates = array_filter($allItems, fn ($row) =>
+                                    isset($row['item_id']) && $row['item_id'] == $state
+                                );
+
+                                if (count($duplicates) > 1) {
+                                    $set('item_id', null);
+                                    $set('sizes', []);
+
+                                    Notification::make()
+                                        ->title('Item already added')
+                                        ->body('This item already exists. Please add more sizes to the existing row instead.')
+                                        ->warning()
+                                        ->send();
+
+                                    return;
+                                }
+
                                 $set('sizes', [['size' => null, 'quantity' => null]]);
-                            }
-                        })
-                        ->required()
-                        ->columnSpanFull(),
+                            })
+                            ->required()
+                            ->columnSpanFull(),
 
                         Repeater::make('sizes')
                             ->label('Sizes & Quantities')

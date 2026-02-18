@@ -6,11 +6,12 @@ use Filament\Forms\Components\DatePicker;
 use Filament\Forms\Components\TextInput;
 use Filament\Schemas\Schema;
 use Filament\Forms\Components\Select;
-use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\Repeater;
-use \App\Models\ItemVariant;
 use Filament\Forms\Components\Placeholder;
+use App\Models\ItemVariant;
 use Illuminate\Support\HtmlString;
+use Filament\Notifications\Notification;
+use Filament\Forms\Components\Textarea;
 
 class IssuanceForm
 {
@@ -39,7 +40,6 @@ class IssuanceForm
                     ->live()
                     ->afterStateUpdated(function (callable $set, $state) {
                         $now = now()->toDateString();
-
                         match ($state) {
                             'pending'   => $set('pending_at', $now),
                             'released'  => $set('released_at', $now),
@@ -50,8 +50,6 @@ class IssuanceForm
                         };
                     })
                     ->required(),
-
-                // --- Status date fields (each visible only for its relevant status) ---
 
                 DatePicker::make('pending_at')
                     ->label('Pending Date')
@@ -79,114 +77,143 @@ class IssuanceForm
                     ->visible(fn (callable $get) => $get('status') === 'cancelled')
                     ->required(fn (callable $get) => $get('status') === 'cancelled'),
 
-                Repeater::make('items')
-                    ->relationship()
-                    ->columns(3)
+                Textarea::make('note')
+                    ->label('Note')
+                    ->nullable()
+                    ->columnSpanFull(),
+
+                // Outer repeater — one row per unique item
+                Repeater::make('issuance_items')
+                    ->label('Items')
+                    ->columns(1)
                     ->schema([
                         Select::make('item_id')
-                            ->relationship('item', 'name')
+                            ->label('Item')
+                            ->options(fn () => \App\Models\Item::pluck('name', 'id')->toArray())
                             ->searchable()
                             ->preload()
                             ->live()
-                            ->required(),
+                            ->afterStateUpdated(function (callable $get, callable $set, $state) {
+                                if (! $state) return;
 
-                        Select::make('size')
-                            ->label('Size')
-                            ->options(function (callable $get) {
-                                $itemId = $get('item_id');
-                                if (!$itemId) return [];
-                                return ItemVariant::where('item_id', $itemId)
-                                    ->get()
-                                    ->mapWithKeys(fn ($variant) => [
-                                        $variant->size_label => "{$variant->size_label} (stock: {$variant->quantity})"
-                                    ])
-                                    ->toArray();
-                            })
-                            ->live()
-                            ->required(),
+                                // Check for duplicate item in outer repeater
+                                $allItems = $get('../../issuance_items') ?? [];
 
-                        TextInput::make('quantity')
-                            ->numeric()
-                            ->minValue(1)
-                            ->live(debounce: 500)
-                            ->rules(function (callable $get) {
-                                $status = $get('../../status');
-
-                                if (!in_array($status, ['issued', 'released'])) {
-                                    return [];
-                                }
-
-                                $itemId = $get('item_id');
-                                $size   = $get('size');
-
-                                if (!$itemId || !$size) {
-                                    return [];
-                                }
-
-                                $variant = ItemVariant::where('item_id', $itemId)
-                                    ->where('size_label', $size)
-                                    ->first();
-
-                                $stock = $variant?->quantity ?? 0;
-
-                                return ["max:{$stock}"];
-                            })
-                            ->validationMessages([
-                                'max' => fn (callable $get) => (function () use ($get): string {
-                                    $itemId = $get('item_id');
-                                    $size   = $get('size');
-
-                                    $variant = ItemVariant::where('item_id', $itemId)
-                                        ->where('size_label', $size)
-                                        ->first();
-
-                                    $stock = $variant?->quantity ?? 0;
-
-                                    return "Current stock is {$stock}. Please save as pending or decrease the quantity.";
-                                })(),
-                            ])
-                            ->required(),
-
-                        Placeholder::make('stock_warning')
-                            ->label('')
-                            ->columnSpanFull()
-                            ->content(function (callable $get): ?HtmlString {
-                                $itemId   = $get('item_id');
-                                $size     = $get('size');
-                                $quantity = (int) $get('quantity');
-                                $status   = $get('../../status');
-
-                                if (!$itemId || !$size || $quantity < 1) {
-                                    return null;
-                                }
-
-                                $variant = ItemVariant::where('item_id', $itemId)
-                                    ->where('size_label', $size)
-                                    ->first();
-
-                                $stock = $variant?->quantity ?? 0;
-
-                                if ($quantity <= $stock) {
-                                    return null;
-                                }
-
-                                $isHard = in_array($status, ['issued', 'released']);
-                                $color  = $isHard ? 'danger' : 'warning';
-
-                                $message = $isHard
-                                    ? "🚫 Current stock is <strong>{$stock}</strong>. Please save as pending or decrease the quantity."
-                                    : "⚠️ Current stock is <strong>{$stock}</strong>. You can save as pending but cannot issue/release until stock is sufficient.";
-
-                                return new HtmlString(
-                                    "<div class=\"flex items-center gap-2 text-sm font-medium 
-                                        text-{$color}-700 bg-{$color}-50 border border-{$color}-300 
-                                        rounded-lg px-3 py-2 mt-1\">
-                                        <span>{$message}</span>
-                                    </div>"
+                                $duplicates = array_filter($allItems, fn ($row) =>
+                                    isset($row['item_id']) && $row['item_id'] == $state
                                 );
-                            }),
+
+                                if (count($duplicates) > 1) {
+                                    $set('item_id', null);
+                                    $set('sizes', []);
+
+                                    Notification::make()
+                                        ->title('Item already added')
+                                        ->body('This item already exists. Please add more sizes to the existing row instead.')
+                                        ->warning()
+                                        ->send();
+
+                                    return;
+                                }
+
+                                $set('sizes', [['size' => null, 'quantity' => null]]);
+                            })
+                            ->required()
+                            ->columnSpanFull(),
+
+                        // Inner repeater — sizes & quantities for the selected item
+                        Repeater::make('sizes')
+                            ->label('Sizes & Quantities')
+                            ->columnSpanFull()
+                            ->hidden(fn (callable $get) => ! $get('item_id'))
+                            ->schema([
+                                Select::make('size')
+                                    ->label('Size')
+                                    ->options(function (callable $get) {
+                                        $itemId = $get('../../item_id');
+                                        if (! $itemId) return [];
+                                        return ItemVariant::where('item_id', $itemId)
+                                            ->get()
+                                            ->mapWithKeys(fn ($v) => [
+                                                $v->size_label => "{$v->size_label} (stock: {$v->quantity})"
+                                            ])
+                                            ->toArray();
+                                    })
+                                    ->live()
+                                    ->afterStateUpdated(function (callable $get, callable $set, $state) {
+                                        if (! $state) return;
+
+                                        $sizes = $get('../../sizes') ?? [];
+
+                                        $duplicateKeys = array_keys(array_filter($sizes, fn ($row) =>
+                                            isset($row['size']) && $row['size'] === $state
+                                        ));
+
+                                        if (count($duplicateKeys) > 1) {
+                                            $set('size', null);
+                                            $set('quantity', null);
+
+                                            Notification::make()
+                                                ->title("Size '{$state}' is already selected")
+                                                ->body('Please update the quantity on the existing row instead.')
+                                                ->warning()
+                                                ->send();
+                                        }
+                                    })
+                                    ->required(),
+
+                                TextInput::make('quantity')
+                                    ->numeric()
+                                    ->minValue(1)
+                                    ->live(debounce: 500)
+                                    ->required(),
+
+                                Placeholder::make('stock_note')
+                                    ->label('')
+                                    ->columnSpanFull()
+                                    ->content(function (callable $get): ?HtmlString {
+                                        $itemId   = $get('../../item_id');
+                                        $size     = $get('size');
+                                        $quantity = (int) $get('quantity');
+                                        $status   = $get('../../../../status');
+
+                                        if (! $itemId || ! $size) return null;
+
+                                        $variant = ItemVariant::where('item_id', $itemId)
+                                            ->where('size_label', $size)
+                                            ->first();
+
+                                        $stock = $variant?->quantity ?? 0;
+
+                                        if ($quantity > 0 && $quantity > $stock) {
+                                            $isHard = in_array($status, ['issued', 'released']);
+                                            $color  = $isHard ? 'danger' : 'warning';
+                                            $message = $isHard
+                                                ? "🚫 Current stock is <strong>{$stock}</strong>. Save as pending or decrease quantity."
+                                                : "⚠️ Current stock is <strong>{$stock}</strong>. You can save as pending but cannot issue/release until stock is sufficient.";
+
+                                            return new HtmlString(
+                                                "<div class='text-sm font-medium text-{$color}-700 
+                                                    bg-{$color}-50 border border-{$color}-300 
+                                                    rounded-lg px-3 py-2 mt-1'>
+                                                    {$message}
+                                                </div>"
+                                            );
+                                        }
+
+                                        return new HtmlString(
+                                            "<div class='text-sm text-gray-600 bg-gray-50 border 
+                                                border-gray-200 rounded-lg px-3 py-2 mt-1'>
+                                                📦 Current stock: <strong>{$stock}</strong>
+                                            </div>"
+                                        );
+                                    }),
+                            ])
+                            ->columns(2)
+                            ->defaultItems(1)
+                            ->addActionLabel('Add Size'),
                     ])
-                    ->columns(2)
+                    ->addActionLabel('Add Item')
                     ->required(),
             ]);
     }

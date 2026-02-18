@@ -16,8 +16,35 @@ class ListIssuances extends ListRecords
 
     protected function getHeaderActions(): array
     {
+        $cachedItems = [];
+
         return [
-            CreateAction::make(),
+            CreateAction::make()
+                ->mutateFormDataUsing(function (array $data) use (&$cachedItems): array {
+                    $cachedItems = $data['issuance_items'] ?? [];
+                    unset($data['issuance_items']);
+                    return $data;
+                })
+                ->after(function ($record) use (&$cachedItems): void {
+                    foreach ($cachedItems as $itemRow) {
+                        $itemId = $itemRow['item_id'] ?? null;
+                        if (! $itemId) continue;
+
+                        foreach ($itemRow['sizes'] ?? [] as $sizeRow) {
+                            $size     = $sizeRow['size'] ?? null;
+                            $quantity = $sizeRow['quantity'] ?? null;
+
+                            if (! $size || ! $quantity) continue;
+
+                            \App\Models\IssuanceItem::create([
+                                'issuance_id' => $record->id,
+                                'item_id'     => $itemId,
+                                'size'        => $size,
+                                'quantity'    => $quantity,
+                            ]);
+                        }
+                    }
+                }),
         ];
     }
 

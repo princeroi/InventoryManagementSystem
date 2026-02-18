@@ -25,6 +25,8 @@ class ListRestocks extends ListRecords
                 unset($data['items']);
                 return $data;
             })
+
+            
             ->after(function ($record) use (&$cachedItems): void {
                 foreach ($cachedItems as $itemRow) {
                     $itemId = $itemRow['item_id'] ?? null;
@@ -88,6 +90,10 @@ class ListRestocks extends ListRecords
                 ->badge(Restock::where('status', 'cancelled')->count())
                 ->badgeColor('danger')
                 ->modifyQueryUsing(fn (Builder $query) => $query->where('status', 'cancelled')),
+            'partial' => Tab::make('Partial')
+                ->badge(Restock::where('status', 'partial')->count())
+                ->badgeColor('primary')
+                ->modifyQueryUsing(fn (Builder $query) => $query->where('status', 'partial')),
         ];
     }
 }
