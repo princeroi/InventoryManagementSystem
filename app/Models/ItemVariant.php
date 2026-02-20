@@ -4,6 +4,8 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Filament\Facades\Filament;
+use Illuminate\Database\Eloquent\Builder;
 
 class ItemVariant extends Model
 {
@@ -66,4 +68,18 @@ class ItemVariant extends Model
         if ($qty < $moq) return 'Low Stock';
         return 'Enough Stock';
     }
+
+    public static function getEloquentQuery(): Builder
+    {
+        $tenant = Filament::getTenant();
+        $query = parent::getEloquentQuery()->with('item');
+
+        if ($tenant) {
+            $itemIds = $tenant->items()->pluck('items.id');
+            $query->whereIn('item_id', $itemIds);
+        }
+
+        return $query;
+    }
+
 }

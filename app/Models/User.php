@@ -9,9 +9,13 @@ use Illuminate\Notifications\Notifiable;
 use Spatie\Permission\Traits\HasRoles;
 use Filament\Models\Contracts\FilamentUser;
 use Filament\Panel;
+use Filament\Models\Contracts\HasTenants;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Support\Collection;
+use Illuminate\Database\Eloquent\Model; 
 
 
-class User extends Authenticatable implements FilamentUser
+class User extends Authenticatable implements FilamentUser, HasTenants
 {
     /** @use HasFactory<\Database\Factories\UserFactory> */
     use HasFactory, Notifiable;
@@ -56,4 +60,28 @@ class User extends Authenticatable implements FilamentUser
     {
         return true;
     }
+
+    public function departments()
+    {
+        return $this->belongsToMany(Department::class, 'department_user');
+    }
+
+    public function getTenants(Panel $panel): Collection
+    {
+        // Super admin sees ALL departments in the switcher
+        if ($this->hasRole('super_admin')) {
+            return Department::all();
+        }
+        return $this->departments;
+    }
+
+    public function canAccessTenant(Model $tenant): bool
+    {
+        // Super admin bypasses tenant check entirely
+        if ($this->hasRole('super_admin')) {
+            return true;
+        }
+        return $this->departments->contains($tenant);
+    }
+
 }

@@ -18,6 +18,7 @@ use Illuminate\Support\Facades\Auth;
 
 class ItemResource extends Resource
 {
+    protected static ?string $tenantOwnershipRelationshipName = 'department';
     protected static ?string $model = Item::class;
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedCube;

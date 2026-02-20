@@ -10,6 +10,7 @@ use App\Models\IssuanceLog;
 class Issuance extends Model
 {
     protected $fillable = [
+        'department_id',  
         'site_id',
         'issued_to',
         'status',
@@ -20,6 +21,7 @@ class Issuance extends Model
         'returned_at',
         'cancelled_at',
         'note',
+        'issuance_type_id',
     ];
 
     protected $casts = [
@@ -33,6 +35,12 @@ class Issuance extends Model
 
     public ?array $logSnapshot = null;
     public bool $forceLog      = false;
+
+    public function department():BelongsTo
+    {
+        return $this->belongsTo(Department::class);
+    }
+
 
     // -------------------------------------------------------------------------
     // Relationships
@@ -53,17 +61,22 @@ class Issuance extends Model
         return $this->hasMany(IssuanceLog::class)->orderBy('created_at', 'desc');
     }
 
+
     // -------------------------------------------------------------------------
     // Accessors
     // -------------------------------------------------------------------------
 
     public function getItemIdsAttribute(): string
     {
-        return $this->items->map(fn ($i) =>
-            $i->size
-                ? "{$i->item->name} ({$i->size}) - {$i->quantity}"
-                : "{$i->item->name} - {$i->quantity}"
-        )->implode('<br>');
+        return $this->items
+            ->map(function ($i) {
+                $itemName = $i->item?->name ?? 'Item Removed';
+
+                return $i->size
+                    ? "{$itemName} ({$i->size}) - {$i->quantity}"
+                    : "{$itemName} - {$i->quantity}";
+            })
+            ->implode('<br>');
     }
 
     public function getStatusDateAttribute(): ?\Illuminate\Support\Carbon
@@ -116,6 +129,7 @@ class Issuance extends Model
             $variant?->increment('quantity', $item->quantity);
         }
     }
+    
 
     // -------------------------------------------------------------------------
     // Model Events
@@ -176,20 +190,9 @@ class Issuance extends Model
                 $stockStatuses    = ['issued', 'released'];
                 $wasStockConsumed = in_array($oldStatus, $stockStatuses);
                 $isStockConsumed  = in_array($newStatus, $stockStatuses);
-
-                // ── INTO stock-consuming status (e.g. pending → released) ────
-                // Only fires from the Edit modal status dropdown change.
-                // The dedicated Release/Issue action buttons set $logSnapshot
-                // and handle their own stock, so we skip when logSnapshot is set
-                // to avoid double-deduction.
                 if ($isStockConsumed && ! $wasStockConsumed && $issuance->logSnapshot === null) {
                     $issuance->deductStock();
                 }
-
-                // ── OUT of stock-consuming status (e.g. released → pending) ──
-                // Restore stock when the user reverts via the Edit modal.
-                // The Return action uses updateQuietly() so this won't fire
-                // for it — no risk of double-restoration.
                 if (! $isStockConsumed && $wasStockConsumed && $issuance->logSnapshot === null) {
                     $issuance->restoreStock();
                 }

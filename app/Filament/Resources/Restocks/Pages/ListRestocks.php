@@ -12,6 +12,7 @@ use Filament\Schemas\Components\Tabs\Tab;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Filament\Facades\Filament;
 
 class ListRestocks extends ListRecords
 {
@@ -55,6 +56,7 @@ class ListRestocks extends ListRecords
                 ->mutateFormDataUsing(function (array $data) use (&$cachedItems): array {
                     $cachedItems = $data['items'] ?? [];
                     unset($data['items']);
+                    $data['department_id'] = Filament::getTenant()->id;  // ← ADD THIS
                     return $data;
                 })
                 ->after(function ($record) use (&$cachedItems): void {

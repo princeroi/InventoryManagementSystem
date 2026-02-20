@@ -17,6 +17,7 @@ use Illuminate\Support\Facades\Auth;
 
 class UserResource extends Resource
 {
+    protected static bool $isScopedToTenant = false;
     protected static ?string $model = User::class;
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedUserGroup;
@@ -32,7 +33,12 @@ class UserResource extends Resource
         return Auth::user()?->can($permission) ?? false;
     }
 
-    public static function canViewAny(): bool       { return self::userCan('view-any user'); }
+    public static function canViewAny(): bool
+    {
+        $user = auth()->user();
+        if (! $user) return false;
+        return $user->hasRole('super_admin') || $user->can('view-any user');
+    }
     public static function canCreate(): bool        { return self::userCan('create user'); }
     public static function canEdit($record): bool   { return self::userCan('update user'); }
     public static function canDelete($record): bool { return self::userCan('delete user'); }

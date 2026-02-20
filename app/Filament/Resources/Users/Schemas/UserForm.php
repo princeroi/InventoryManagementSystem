@@ -4,6 +4,7 @@ namespace App\Filament\Resources\Users\Schemas;
 
 use Filament\Forms\Components\DateTimePicker;
 use Filament\Forms\Components\TextInput;
+use Filament\Forms\Components\MultiSelect;
 use Filament\Schemas\Schema;
 use Filament\Forms\Components\Select;
 use Filament\Pages\Page;
@@ -31,6 +32,9 @@ class UserForm
                 Select::make('roles')
                     ->multiple()
                     ->relationship('roles', 'name'),
+                MultiSelect::make('departments')
+                    ->relationship('departments', 'name') 
+                    ->label('Departments'),
             ]);
     }
 }

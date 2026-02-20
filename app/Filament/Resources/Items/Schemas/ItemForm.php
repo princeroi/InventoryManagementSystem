@@ -7,6 +7,8 @@ use Filament\Forms\Components\Textarea;
 use Filament\Schemas\Schema;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Repeater;
+use Filament\Facades\Filament;  
+use App\Models\Category;        
 
 class ItemForm
 {
@@ -20,7 +22,12 @@ class ItemForm
 
                 // Fixed: relationship name should be lowercase 'category' not 'Category'
                 Select::make('category_id')
-                    ->relationship('category', 'name')
+                    ->label('Category')
+                    ->options(function () {
+                        $tenant = Filament::getTenant();
+                        return Category::where('department_id', $tenant->id)
+                            ->pluck('name', 'id');
+                    })
                     ->searchable()
                     ->preload()
                     ->required()
@@ -31,7 +38,14 @@ class ItemForm
                         Textarea::make('description')
                             ->label('Description')
                             ->rows(2),
-                    ]),
+                    ])
+                    ->createOptionUsing(function (array $data): int {  // ← only this is new
+                        return Category::create([
+                            'name'          => $data['name'],
+                            'description'   => $data['description'] ?? null,
+                            'department_id' => Filament::getTenant()->id,
+                        ])->id;
+                    }),
 
                 Textarea::make('description')
                     ->default(null)

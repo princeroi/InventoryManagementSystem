@@ -12,6 +12,8 @@ use App\Models\ItemVariant;
 use Illuminate\Support\HtmlString;
 use Filament\Notifications\Notification;
 use Filament\Forms\Components\Textarea;
+use Filament\Facades\Filament;
+use App\Models\IssuanceType;
 
 class IssuanceForm
 {
@@ -105,7 +107,12 @@ class IssuanceForm
                     ->schema([
                         Select::make('item_id')
                             ->label('Item')
-                            ->options(fn () => \App\Models\Item::pluck('name', 'id')->toArray())
+                            ->options(function () {
+                                $tenant = Filament::getTenant();
+                                return \App\Models\Item::whereHas('department', fn ($q) =>
+                                    $q->where('departments.id', $tenant->id)
+                                )->pluck('name', 'id')->toArray();
+                            })
                             ->searchable()
                             ->preload()
                             ->live()

@@ -7,6 +7,7 @@ use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
 use Filament\Widgets\TableWidget as BaseWidget;
 use Illuminate\Database\Eloquent\Builder;
+use Filament\Facades\Filament;
 
 class LowStockWidget extends BaseWidget
 {
@@ -18,9 +19,20 @@ class LowStockWidget extends BaseWidget
 
     public function table(Table $table): Table
     {
-        $lowStockIds = cache()->remember('low_stock_ids', now()->addMinutes(5), fn () =>
-            ItemVariant::with('item:id,name')
-                ->get()
+        $tenant = Filament::getTenant();
+
+        $baseQuery = ItemVariant::query()->with('item:id,name');
+
+        if ($tenant) {
+            $baseQuery->whereHas('item', fn (Builder $q) =>
+                $q->whereHas('department', fn (Builder $q) =>
+                    $q->where('departments.id', $tenant->id)
+                )
+            );
+        }
+
+        $lowStockIds = cache()->remember("low_stock_ids_{$tenant?->id}", now()->addMinutes(5), fn () =>
+            (clone $baseQuery)->get()
                 ->filter(fn ($variant) => $variant->quantity <= $variant->moq)
                 ->pluck('id')
         );

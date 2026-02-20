@@ -13,9 +13,11 @@ use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Auth;
+use Filament\Facades\Filament;
 
 class ItemVariantResource extends Resource
 {
+    protected static bool $isScopedToTenant = false;
     protected static ?string $model = ItemVariant::class;
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedClipboardDocumentList;
@@ -73,9 +75,21 @@ class ItemVariantResource extends Resource
 
     public static function getEloquentQuery(): Builder
     {
-        // Eager load item so item.name column doesn't fire N+1 per row
-        return parent::getEloquentQuery()
-            ->with(['item:id,name']);
+        $query = parent::getEloquentQuery()
+            ->with(['item:id,name,category_id']);
+
+        $tenant = Filament::getTenant();
+
+        if ($tenant) {
+            // Filter variants whose item belongs to the current department
+            $query->whereHas('item', function (Builder $q) use ($tenant) {
+                $q->whereHas('department', function (Builder $q) use ($tenant) {
+                    $q->where('departments.id', $tenant->id);
+                });
+            });
+        }
+
+        return $query;
     }
 
     // -------------------------------------------------------------------------

@@ -17,6 +17,7 @@ use Illuminate\Support\Facades\Auth;
 
 class SiteResource extends Resource
 {
+    protected static bool $isScopedToTenant = false;
     protected static ?string $model = Site::class;
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedMapPin;
@@ -32,11 +33,17 @@ class SiteResource extends Resource
         return Auth::user()?->can($permission) ?? false;
     }
 
-    public static function canViewAny(): bool       { return self::userCan('view-any site'); }
+    public static function canViewAny(): bool
+    {
+        return auth()->user()?->hasRole('super_admin')
+            || auth()->user()?->can('view-any site')
+            ?? false;
+    }
     public static function canCreate(): bool        { return self::userCan('create site'); }
     public static function canEdit($record): bool   { return self::userCan('update site'); }
     public static function canDelete($record): bool { return self::userCan('delete site'); }
 
+    
     // -------------------------------------------------------------------------
     // Navigation
     // -------------------------------------------------------------------------
@@ -69,10 +76,14 @@ class SiteResource extends Resource
         return [];
     }
 
+    
+
     public static function getPages(): array
     {
         return [
             'index' => ListSites::route('/'),
         ];
     }
+
+    
 }

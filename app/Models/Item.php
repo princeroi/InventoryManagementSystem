@@ -5,7 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
-
+use Illuminate\Database\Eloquent\Relations\BelongsToMany; 
 class Item extends Model
 {
     protected $fillable = [
@@ -23,5 +23,10 @@ class Item extends Model
     {
         return $this->hasMany(ItemVariant::class);
     }
+
+    public function department(): BelongsToMany
+{
+    return $this->belongsToMany(Department::class);
+}
 }
 

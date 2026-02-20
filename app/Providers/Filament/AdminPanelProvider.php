@@ -22,6 +22,9 @@ use App\Filament\Widgets\StatsOverviewWidget;
 use App\Filament\Widgets\LowStockWidget;
 use App\Filament\Widgets\RecentIssuancesWidget;
 use App\Filament\Widgets\RecentRestocksWidget;
+use App\Models\Department;
+use Spatie\Permission\Models\Role;
+use Spatie\Permission\Models\Permission;
 
 class AdminPanelProvider extends PanelProvider
 {
@@ -32,6 +35,7 @@ class AdminPanelProvider extends PanelProvider
             ->globalSearch(false)
             ->id('admin')
             ->path('admin')
+            ->tenant(Department::class, slugAttribute: 'slug')
             ->login()
             ->colors([
                 'primary' => Color::Amber,

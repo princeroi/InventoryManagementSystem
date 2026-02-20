@@ -10,6 +10,7 @@ use BackedEnum;
 
 class PermissionResource extends BasePermissionResource
 {
+    protected static bool $isScopedToTenant = false;
     protected static ?string $navigationLabel               = 'Permissions';
     protected static ?int $navigationSort                   = 2;
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedKey;
@@ -19,7 +20,13 @@ class PermissionResource extends BasePermissionResource
         return 'User Management';
     }
 
-    public static function canViewAny(): bool       { return Auth::user()?->can('view-any permission') ?? false; }
+    public static function canViewAny(): bool
+    {
+        $user = auth()->user();
+        if (! $user) return false;
+        return $user->hasRole('super_admin') || $user->can('view-any permission');
+    }
+
     public static function canCreate(): bool        { return Auth::user()?->can('create permission') ?? false; }
     public static function canEdit($r): bool        { return Auth::user()?->can('update permission') ?? false; }
     public static function canDelete($r): bool      { return Auth::user()?->can('delete permission') ?? false; }

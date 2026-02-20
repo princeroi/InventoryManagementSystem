@@ -6,6 +6,7 @@ use App\Models\Restock;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
 use Filament\Widgets\TableWidget as BaseWidget;
+use Filament\Facades\Filament;
 
 class RecentRestocksWidget extends BaseWidget
 {
@@ -20,6 +21,9 @@ class RecentRestocksWidget extends BaseWidget
         return $table
             ->query(
                 Restock::query()
+                    ->when(Filament::getTenant(), fn ($q, $tenant) =>
+                        $q->where('department_id', $tenant->id)
+                    )
                     ->latest('updated_at')
                     ->limit(8)
             )

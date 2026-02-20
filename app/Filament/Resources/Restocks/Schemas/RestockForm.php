@@ -12,6 +12,8 @@ use Filament\Forms\Components\Placeholder;
 use App\Models\ItemVariant;
 use Illuminate\Support\HtmlString;
 use Filament\Notifications\Notification;
+use Filament\Facades\Filament;
+use App\Models\Item;
 
 class RestockForm
 {
@@ -104,7 +106,12 @@ class RestockForm
                     ->schema([
                         Select::make('item_id')
                             ->label('Item')
-                            ->options(fn () => \App\Models\Item::pluck('name', 'id')->toArray())
+                            ->options(function () {
+                                $tenant = Filament::getTenant();
+                                return Item::whereHas('department', fn ($q) =>
+                                    $q->where('departments.id', $tenant->id)
+                                )->pluck('name', 'id');
+                            })
                             ->searchable()
                             ->preload()
                             ->live()

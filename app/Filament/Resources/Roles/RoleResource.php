@@ -10,6 +10,8 @@ use BackedEnum;
 
 class RoleResource extends BaseRoleResource
 {
+
+    protected static bool $isScopedToTenant = false;
     protected static ?string $navigationLabel               = 'Roles';
     protected static ?int $navigationSort                   = 1;
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedShieldCheck;
@@ -19,7 +21,13 @@ class RoleResource extends BaseRoleResource
         return 'User Management';
     }
 
-    public static function canViewAny(): bool       { return Auth::user()?->can('view-any role') ?? false; }
+    public static function canViewAny(): bool
+    {
+        $user = auth()->user();
+        if (! $user) return false;
+        return $user->hasRole('super_admin') || $user->can('view-any role');
+    }
+
     public static function canCreate(): bool        { return Auth::user()?->can('create role') ?? false; }
     public static function canEdit($r): bool        { return Auth::user()?->can('update role') ?? false; }
     public static function canDelete($r): bool      { return Auth::user()?->can('delete role') ?? false; }

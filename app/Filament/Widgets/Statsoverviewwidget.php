@@ -10,35 +10,60 @@ use App\Models\Site;
 use App\Models\Category;
 use Filament\Widgets\StatsOverviewWidget as BaseWidget;
 use Filament\Widgets\StatsOverviewWidget\Stat;
+use Filament\Facades\Filament;
 
 class StatsOverviewWidget extends BaseWidget
 {
     protected static ?int $sort = 1;
 
+
     protected function getStats(): array
     {
-        $totalItems        = Item::count();
-        $totalCategories   = Category::count();
-        $totalSites        = Site::count();
-        $totalVariants     = ItemVariant::count();
-        $totalStock        = ItemVariant::sum('quantity');
-        $outOfStockCount   = ItemVariant::where('quantity', 0)->count();
+        $tenant = Filament::getTenant();
 
-        // moq is a computed PHP attribute — must filter in PHP, not SQL
-        $lowStockIds = cache()->remember('low_stock_ids', now()->addMinutes(5), fn () =>
-            ItemVariant::all()
-                ->filter(fn ($v) => $v->quantity <= $v->moq)
-                ->pluck('id')
+        // Get item IDs for this tenant
+        $itemIds = $tenant ? $tenant->items()->pluck('items.id') : null;
+        $hasItems = $itemIds && $itemIds->isNotEmpty();
+
+        // If tenant exists but has no items, show zeros
+        $variantQuery = ItemVariant::query();
+        if ($tenant) {
+            if ($hasItems) {
+                $variantQuery->whereIn('item_id', $itemIds);
+            } else {
+                $variantQuery->whereRaw('0 = 1'); // explicit empty — no variants
+            }
+        }
+
+        $totalItems      = $hasItems ? $itemIds->count() : ($tenant ? 0 : Item::count());
+        $totalCategories = $tenant ? Category::where('department_id', $tenant->id)->count() : Category::count();
+        $totalSites      = Site::count();
+        $totalVariants   = (clone $variantQuery)->count();
+        $totalStock      = (clone $variantQuery)->sum('quantity');
+        $outOfStockCount = (clone $variantQuery)->where('quantity', 0)->count();
+
+        $lowStockIds = cache()->remember("low_stock_ids_{$tenant?->id}", now()->addMinutes(5), fn () =>
+            $hasItems
+                ? (clone $variantQuery)->get()
+                    ->filter(fn ($v) => $v->quantity <= $v->moq)
+                    ->pluck('id')
+                : collect()
         );
 
-        $lowStockCount     = $lowStockIds->count();
+        $lowStockCount = $lowStockIds->count(); // ← now always defined
 
-        $pendingIssuances  = Issuance::where('status', 'pending')->count();
-        $releasedIssuances = Issuance::where('status', 'released')->count();
-        $issuedCount       = Issuance::where('status', 'issued')->count();
+        $issuanceQuery = Issuance::query()
+            ->when($tenant, fn ($q) => $q->where('department_id', $tenant->id));
 
-        $pendingRestocks   = Restock::where('status', 'pending')->count();
-        $partialRestocks   = Restock::where('status', 'partial')->count();
+        $restockQuery = Restock::query()
+            ->when($tenant, fn ($q) => $q->where('department_id', $tenant->id));
+
+        $pendingIssuances  = (clone $issuanceQuery)->where('status', 'pending')->count();
+        $releasedIssuances = (clone $issuanceQuery)->where('status', 'released')->count();
+        $issuedCount       = (clone $issuanceQuery)->where('status', 'issued')->count();
+        $pendingRestocks   = (clone $restockQuery)->where('status', 'pending')->count();
+        $partialRestocks   = (clone $restockQuery)->where('status', 'partial')->count();
+
 
         return [
             Stat::make('Total Items', $totalItems)
