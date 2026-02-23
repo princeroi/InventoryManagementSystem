@@ -13,9 +13,14 @@ use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Auth;
+use Filament\Facades\Filament;
 
 class IssuanceResource extends Resource
 {
+    public static function canAccess(): bool
+    {
+        return Filament::getTenant()?->slug === 'operation';
+    }
     protected static ?string $model = Issuance::class;
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedArrowUpOnSquare;
     protected static ?string $recordTitleAttribute = 'issued_to';

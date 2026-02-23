@@ -6,10 +6,20 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Collection;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Casts\Attribute;
 
 class Department extends Model 
 {
     protected $fillable = ['name', 'slug'];
+
+    protected function name(): Attribute
+    {
+        return Attribute::get(fn ($value) => match ($this->slug) {
+            'hr'  => 'Uniform Inventory',
+            'operation' => 'SME Inventory',
+            default => $value,
+        });
+    }
 
     public function users(): BelongsToMany
     {

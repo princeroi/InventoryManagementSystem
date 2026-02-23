@@ -1,15 +1,15 @@
 <?php
 
-namespace App\Filament\Resources\IssuanceTypes\Pages;
+namespace App\Filament\Resources\Positions\Pages;
 
-use App\Filament\Resources\IssuanceTypes\IssuanceTypeResource;
+use App\Filament\Resources\Positions\PositionResource;
 use Filament\Actions\CreateAction;
 use Filament\Resources\Pages\ListRecords;
 use Filament\Facades\Filament;
 
-class ListIssuanceTypes extends ListRecords
+class ListPositions extends ListRecords
 {
-    protected static string $resource = IssuanceTypeResource::class;
+    protected static string $resource = PositionResource::class;
 
     protected function getHeaderActions(): array
     {

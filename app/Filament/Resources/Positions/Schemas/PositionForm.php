@@ -1,12 +1,12 @@
 <?php
 
-namespace App\Filament\Resources\IssuanceTypes\Schemas;
+namespace App\Filament\Resources\Positions\Schemas;
 
+use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
-use Filament\Forms\Components\Textarea;
 use Filament\Schemas\Schema;
 
-class IssuanceTypeForm
+class PositionForm
 {
     public static function configure(Schema $schema): Schema
     {
@@ -14,8 +14,7 @@ class IssuanceTypeForm
             ->components([
                 TextInput::make('name')
                     ->required(),
-                Textarea::make('description')
-                    ->columnSpanFull(),
+                TextInput::make('description'),
             ]);
     }
 }
