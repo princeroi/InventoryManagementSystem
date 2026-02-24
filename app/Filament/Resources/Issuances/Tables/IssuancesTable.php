@@ -79,9 +79,8 @@ class IssuancesTable
                     COALESCE(
                         CASE status
                             WHEN 'pending'   THEN pending_at
-                            WHEN 'released'  THEN released_at
-                            WHEN 'partial'   THEN partial_at
                             WHEN 'issued'    THEN issued_at
+                            WHEN 'partial'   THEN partial_at
                             WHEN 'returned'  THEN returned_at
                             WHEN 'cancelled' THEN cancelled_at
                             ELSE NULL
@@ -105,9 +104,9 @@ class IssuancesTable
                     ->badge()
                     ->colors([
                         'warning' => 'pending',
-                        'info'    => 'released',
                         'primary' => 'partial',
                         'success' => 'issued',
+                        'gray'    => 'returned',
                         'danger'  => 'cancelled',
                     ]),
 
@@ -115,8 +114,7 @@ class IssuancesTable
                     ->label('Date')
                     ->getStateUsing(fn ($record) => match ($record->status) {
                         'pending'   => $record->pending_at,
-                        'released'  => $record->released_at,
-                        'partial'   => $record->partial_at,   
+                        'partial'   => $record->partial_at,
                         'issued'    => $record->issued_at,
                         'returned'  => $record->returned_at,
                         'cancelled' => $record->cancelled_at,
@@ -140,17 +138,19 @@ class IssuancesTable
             ->filters([])
             ->recordActions([
                 ActionGroup::make([
-                    Action::make('release')
-                        ->label('Release')
-                        ->color('primary')
-                        ->icon('heroicon-s-truck')
+
+                    // ISSUE — pending/partial → issued (with quantity input + stock deduction)
+                    Action::make('issue')
+                        ->label('Issue')
+                        ->color('success')
+                        ->icon('heroicon-s-check')
                         ->visible(fn ($record) =>
                             in_array($record->status, ['pending', 'partial']) &&
                             self::userCan('release issuance')
                         )
-                        ->modalHeading('Release Issuance')
-                        ->modalDescription('Enter the quantity to release for each item.')
-                        ->modalSubmitActionLabel('Confirm Release')
+                        ->modalHeading('Issue Issuance')
+                        ->modalDescription('Enter the quantity to issue for each item.')
+                        ->modalSubmitActionLabel('Confirm Issue')
                         ->form(function ($record): array {
                             $fields = [];
 
@@ -170,7 +170,7 @@ class IssuancesTable
                                     ->maxValue($remaining)
                                     ->default($remaining)
                                     ->suffix("/ {$remaining} remaining (ordered: {$ordered})")
-                                    ->helperText("Max releasable: {$remaining}")
+                                    ->helperText("Max issuable: {$remaining}")
                                     ->required()
                                     ->dehydrated(true);
                             }
@@ -179,7 +179,7 @@ class IssuancesTable
                         })
                         ->action(function ($record, array $data) {
                             $quantities   = $data['quantities'] ?? [];
-                            $allReleased  = true;
+                            $allIssued    = true;
                             $itemSnapshot = [];
 
                             $variantMap        = self::variantMap($record->items);
@@ -187,25 +187,25 @@ class IssuancesTable
 
                             // Check stock first
                             foreach ($record->items as $index => $issuanceItem) {
-                                $remaining   = $issuanceItem->remaining_quantity ?? $issuanceItem->quantity;
-                                $releaseQty  = (int) ($quantities[$index] ?? 0);
-                                $toRelease   = min($releaseQty, $remaining);
+                                $remaining = $issuanceItem->remaining_quantity ?? $issuanceItem->quantity;
+                                $issueQty  = (int) ($quantities[$index] ?? 0);
+                                $toIssue   = min($issueQty, $remaining);
 
-                                if ($toRelease <= 0) continue;
+                                if ($toIssue <= 0) continue;
 
                                 $key     = "{$issuanceItem->item_id}:{$issuanceItem->size}";
                                 $variant = $variantMap[$key] ?? null;
                                 $stock   = $variant?->quantity ?? 0;
 
-                                if ($toRelease > $stock) {
-                                    $insufficientItems[] = "{$issuanceItem->item->name} ({$issuanceItem->size}): needs {$toRelease}, has {$stock}";
+                                if ($toIssue > $stock) {
+                                    $insufficientItems[] = "{$issuanceItem->item->name} ({$issuanceItem->size}): needs {$toIssue}, has {$stock}";
                                 }
                             }
 
                             if (! empty($insufficientItems)) {
                                 Notification::make()
                                     ->title('Insufficient Stock')
-                                    ->body('Cannot release. Stock too low for: ' . implode(' | ', $insufficientItems))
+                                    ->body('Cannot issue. Stock too low for: ' . implode(' | ', $insufficientItems))
                                     ->danger()
                                     ->persistent()
                                     ->send();
@@ -215,39 +215,39 @@ class IssuancesTable
                             // Deduct stock and update items
                             foreach ($record->items as $index => $issuanceItem) {
                                 $remaining    = $issuanceItem->remaining_quantity ?? $issuanceItem->quantity;
-                                $releaseQty   = (int) ($quantities[$index] ?? 0);
-                                $toRelease    = min($releaseQty, $remaining);
-                                $newRemaining = $remaining - $toRelease;
+                                $issueQty     = (int) ($quantities[$index] ?? 0);
+                                $toIssue      = min($issueQty, $remaining);
+                                $newRemaining = $remaining - $toIssue;
 
                                 $issuanceItem->update([
-                                    'released_quantity' => ($issuanceItem->released_quantity ?? 0) + $toRelease,
+                                    'released_quantity'  => ($issuanceItem->released_quantity ?? 0) + $toIssue,
                                     'remaining_quantity' => $newRemaining,
                                 ]);
 
                                 if ($newRemaining > 0) {
-                                    $allReleased = false;
+                                    $allIssued = false;
                                 }
 
                                 $key     = "{$issuanceItem->item_id}:{$issuanceItem->size}";
                                 $variant = $variantMap[$key] ?? null;
 
-                                if ($variant && $toRelease > 0) {
-                                    $variant->decrement('quantity', $toRelease);
+                                if ($variant && $toIssue > 0) {
+                                    $variant->decrement('quantity', $toIssue);
                                 }
 
-                                if ($toRelease > 0) {
+                                if ($toIssue > 0) {
                                     $itemName       = $issuanceItem->item?->name ?? "Item #{$issuanceItem->item_id}";
                                     $label          = $issuanceItem->size ? "{$itemName} ({$issuanceItem->size})" : $itemName;
                                     $itemSnapshot[] = [
                                         'label'     => $label,
-                                        'released'  => $toRelease,
+                                        'released'  => $toIssue,
                                         'remaining' => $newRemaining,
                                         'ordered'   => $issuanceItem->quantity,
                                     ];
                                 }
                             }
 
-                            $newStatus           = $allReleased ? 'released' : 'partial';
+                            $newStatus           = $allIssued ? 'issued' : 'partial';
                             $record->logSnapshot = $itemSnapshot;
                             $record->forceLog    = true;
 
@@ -266,43 +266,21 @@ class IssuancesTable
                                 $record->logSnapshot = null;
                             }
 
-                            $msg = $allReleased
-                                ? 'Issuance fully released and stock deducted.'
-                                : 'Issuance partially released and stock deducted.';
+                            $msg = $allIssued
+                                ? 'Issuance fully issued and stock deducted.'
+                                : 'Issuance partially issued and stock deducted.';
 
                             Notification::make()->title($msg)->success()->send();
                         })
                         ->requiresConfirmation(),
 
-                    // ISSUE — released → issued, no stock change
-                    Action::make('issue')
-                        ->label('Issue')
-                        ->color('success')
-                        ->icon('heroicon-s-check')
-                        ->visible(fn ($record) =>
-                            $record->status === 'released' &&
-                            self::userCan('issue issuance')
-                        )
-                        ->action(function ($record) {
-                            $record->update([
-                                'status'    => 'issued',
-                                'issued_at' => now(),
-                            ]);
-
-                            Notification::make()
-                                ->title('Issuance marked as issued.')
-                                ->success()
-                                ->send();
-                        })
-                        ->requiresConfirmation(),
-
-                    // RETURN — released → returned
+                    // RETURN — issued → returned
                     Action::make('return')
                         ->label('Return')
                         ->color('warning')
                         ->icon('heroicon-s-arrow-path')
                         ->visible(fn ($record) =>
-                            $record->status === 'released' &&
+                            $record->status === 'issued' &&
                             self::userCan('return issuance')
                         )
                         ->modalHeading('Return Issuance')
@@ -339,8 +317,8 @@ class IssuancesTable
                         })
                         ->action(function ($record, array $data) {
                             $record->load('items');
-                            $quantities  = $data['quantities'] ?? [];
-                            $variantMap  = self::variantMap($record->items);
+                            $quantities   = $data['quantities'] ?? [];
+                            $variantMap   = self::variantMap($record->items);
                             $itemSnapshot = [];
 
                             $restoreStock = $data['restore_stock'] ?? true;
@@ -493,8 +471,7 @@ class IssuancesTable
                         $config = [
                             'created'   => ['color' => '#6366f1', 'bg' => '#eef2ff', 'border' => '#c7d2fe', 'label' => 'Created',   'icon' => 'M12 4v16m8-8H4'],
                             'pending'   => ['color' => '#d97706', 'bg' => '#fffbeb', 'border' => '#fde68a', 'label' => 'Pending',   'icon' => 'M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z'],
-                            'partial' => ['color' => '#7c3aed', 'bg' => '#f5f3ff', 'border' => '#ddd6fe', 'label' => 'Partial', 'icon' => 'M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z'],
-                            'released'  => ['color' => '#2563eb', 'bg' => '#eff6ff', 'border' => '#bfdbfe', 'label' => 'Released',  'icon' => 'M5 13l4 4L19 7'],
+                            'partial'   => ['color' => '#7c3aed', 'bg' => '#f5f3ff', 'border' => '#ddd6fe', 'label' => 'Partial',   'icon' => 'M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z'],
                             'issued'    => ['color' => '#059669', 'bg' => '#ecfdf5', 'border' => '#a7f3d0', 'label' => 'Issued',    'icon' => 'M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z'],
                             'returned'  => ['color' => '#ea580c', 'bg' => '#fff7ed', 'border' => '#fed7aa', 'label' => 'Returned',  'icon' => 'M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15'],
                             'cancelled' => ['color' => '#dc2626', 'bg' => '#fef2f2', 'border' => '#fecaca', 'label' => 'Cancelled', 'icon' => 'M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z'],
@@ -514,7 +491,6 @@ class IssuancesTable
                             // ── Parse item snapshot ───────────────────────
                             $itemsHtml   = '';
                             $noteHtml    = '';
-                            $noteText    = '';
                             $rawNote     = $log->note;
                             $parsedItems = null;
 
@@ -530,9 +506,9 @@ class IssuancesTable
                             if (! empty($parsedItems)) {
                                 $rows = '';
                                 foreach ($parsedItems as $item) {
-                                    $label    = e($item['label'] ?? '');
-                                    $ordered  = $item['ordered'] ?? '?';
-                                    $chips    = "
+                                    $label   = e($item['label'] ?? '');
+                                    $ordered = $item['ordered'] ?? '?';
+                                    $chips   = "
                                         <span style='
                                             background:#f3f4f6; border:1px solid #e5e7eb;
                                             border-radius:999px; padding:1px 8px;
@@ -546,10 +522,10 @@ class IssuancesTable
 
                                         $chips .= "
                                             <span style='
-                                                background:#eff6ff; border:1px solid #bfdbfe;
+                                                background:#ecfdf5; border:1px solid #a7f3d0;
                                                 border-radius:999px; padding:1px 8px;
-                                                font-size:11px; color:#2563eb; font-weight:600;
-                                            '>📤 {$released} released</span>
+                                                font-size:11px; color:#059669; font-weight:600;
+                                            '>📤 {$released} issued</span>
                                         ";
 
                                         if ($remaining > 0) {
@@ -561,15 +537,6 @@ class IssuancesTable
                                                 '>⏳ {$remaining} remaining</span>
                                             ";
                                         }
-                                    } elseif (isset($item['returned'])) {
-                                        $returned = $item['returned'];
-                                        $chips   .= "
-                                            <span style='
-                                                background:#fff7ed; border:1px solid #fed7aa;
-                                                border-radius:999px; padding:1px 8px;
-                                                font-size:11px; color:#ea580c; font-weight:600;
-                                            '>🔄 {$returned} returned</span>
-                                        ";
                                     } elseif (isset($item['quantity'])) {
                                         $quantity = $item['quantity'];
                                         $action   = $item['action'] ?? '';
@@ -640,14 +607,14 @@ class IssuancesTable
             ->toolbarActions([
                 BulkActionGroup::make([
 
-                    // BULK RELEASE
+                    // BULK ISSUE
                     BulkAction::make('bulk_release')
-                        ->label('Release Selected')
-                        ->color('primary')
-                        ->icon('heroicon-s-truck')
+                        ->label('Issue Selected')
+                        ->color('success')
+                        ->icon('heroicon-s-check')
                         ->visible(fn () => self::userCan('release issuance'))
                         ->modalDescription(fn ($records) =>
-                            'Only pending records will be released. ' .
+                            'Only pending records will be issued. ' .
                             $records->where('status', '!=', 'pending')->count() . ' record(s) will be skipped.'
                         )
                         ->action(function ($records) {
@@ -656,8 +623,8 @@ class IssuancesTable
                             $allItems   = $pendingRecords->flatMap(fn ($r) => $r->items);
                             $variantMap = self::variantMap($allItems);
 
-                            $skipped  = [];
-                            $released = 0;
+                            $skipped = [];
+                            $issued  = 0;
 
                             foreach ($pendingRecords as $record) {
                                 $insufficientItems = [];
@@ -690,16 +657,16 @@ class IssuancesTable
                                 }
 
                                 $record->update([
-                                    'status'      => 'released',
-                                    'released_at' => now(),
+                                    'status'    => 'issued',
+                                    'issued_at' => now(),
                                 ]);
 
-                                $released++;
+                                $issued++;
                             }
 
-                            if ($released > 0) {
+                            if ($issued > 0) {
                                 Notification::make()
-                                    ->title("{$released} record(s) released and stock deducted.")
+                                    ->title("{$issued} record(s) issued and stock deducted.")
                                     ->success()
                                     ->send();
                             }
@@ -712,35 +679,6 @@ class IssuancesTable
                                     ->persistent()
                                     ->send();
                             }
-                        })
-                        ->requiresConfirmation()
-                        ->deselectRecordsAfterCompletion(),
-
-                    // BULK ISSUE
-                    BulkAction::make('bulk_issue')
-                        ->label('Issue Selected')
-                        ->color('success')
-                        ->icon('heroicon-s-check')
-                        ->visible(fn () => self::userCan('issue issuance'))
-                        ->modalDescription(fn ($records) =>
-                            'Only released records will be issued. ' .
-                            $records->where('status', '!=', 'released')->count() . ' record(s) will be skipped.'
-                        )
-                        ->action(function ($records) {
-                            $issued = 0;
-
-                            foreach ($records->where('status', 'released') as $record) {
-                                $record->update([
-                                    'status'    => 'issued',
-                                    'issued_at' => now(),
-                                ]);
-                                $issued++;
-                            }
-
-                            Notification::make()
-                                ->title("{$issued} record(s) marked as issued.")
-                                ->success()
-                                ->send();
                         })
                         ->requiresConfirmation()
                         ->deselectRecordsAfterCompletion(),
@@ -760,7 +698,7 @@ class IssuancesTable
                                     ->columnSpanFull()
                                     ->content(new HtmlString(
                                         "<div class='flex items-center gap-2 text-sm text-blue-700 bg-blue-50 border border-blue-200 rounded-lg px-4 py-2'>
-                                            ℹ️ Only <strong>released</strong> records will be returned. All others will be skipped.
+                                            ℹ️ Only <strong>issued</strong> records will be returned. All others will be skipped.
                                         </div>"
                                     )),
 
@@ -793,15 +731,15 @@ class IssuancesTable
                             ];
                         })
                         ->action(function ($records, array $data) {
-                            $releasedRecords = $records->where('status', 'released');
-                            $restoreStock    = (bool) ($data['restore_stock'] ?? true);
-                            $returned        = 0;
+                            $issuedRecords = $records->where('status', 'issued');
+                            $restoreStock  = (bool) ($data['restore_stock'] ?? true);
+                            $returned      = 0;
 
                             if ($restoreStock) {
-                                $allItems   = $releasedRecords->flatMap(fn ($r) => $r->load('items')->items);
+                                $allItems   = $issuedRecords->flatMap(fn ($r) => $r->load('items')->items);
                                 $variantMap = self::variantMap($allItems);
 
-                                foreach ($releasedRecords as $record) {
+                                foreach ($issuedRecords as $record) {
                                     $record->updateQuietly([
                                         'status'      => 'returned',
                                         'returned_at' => now(),
@@ -819,7 +757,7 @@ class IssuancesTable
                                     $returned++;
                                 }
                             } else {
-                                foreach ($releasedRecords as $record) {
+                                foreach ($issuedRecords as $record) {
                                     $record->updateQuietly([
                                         'status'      => 'returned',
                                         'returned_at' => now(),

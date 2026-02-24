@@ -12,26 +12,19 @@ use Filament\Resources\Pages\ListRecords;
 use Filament\Facades\Filament;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Database\Eloquent\Builder;
-use Filament\Schemas\Components\Tabs;
 use Filament\Schemas\Components\Tabs\Tab;
 use Illuminate\Support\Facades\DB;
+use Filament\Notifications\Notification;
+use Filament\Actions\Action;
 
 class ListUniformIssuances extends ListRecords
 {
     protected static string $resource = UniformIssuanceResource::class;
 
-    // -------------------------------------------------------------------------
-    // Permission Helper
-    // -------------------------------------------------------------------------
-
     private function userCan(string $permission): bool
     {
         return Auth::user()?->can($permission) ?? false;
     }
-
-    // -------------------------------------------------------------------------
-    // Status Counts
-    // -------------------------------------------------------------------------
 
     protected function getStatusCounts(): array
     {
@@ -44,14 +37,8 @@ class ListUniformIssuances extends ListRecords
             ->pluck('total', 'status')
             ->toArray();
 
-        $total = array_sum($rows);
-
-        return array_merge(['all' => $total], $rows);
+        return array_merge(['all' => array_sum($rows)], $rows);
     }
-
-    // -------------------------------------------------------------------------
-    // Header Actions
-    // -------------------------------------------------------------------------
 
     protected function getHeaderActions(): array
     {
@@ -66,8 +53,8 @@ class ListUniformIssuances extends ListRecords
                     $employees = $data['employees'] ?? [];
                     unset($data['employees']);
 
-                    // ── Stock validation BEFORE saving anything ───────────────────────────
-                    if (in_array($data['status'] ?? 'pending', ['released', 'partial', 'issued'])) {
+                    // ── Stock validation ──────────────────────────────────────
+                    if (in_array($data['status'] ?? 'pending', ['partial', 'issued'])) {
                         $insufficient = [];
 
                         foreach ($employees as $employee) {
@@ -81,7 +68,6 @@ class ListUniformIssuances extends ListRecords
                                 $variant = \App\Models\ItemVariant::where('item_id', $itemId)
                                     ->where('size_label', $size)
                                     ->first();
-
                                 $stock = $variant?->quantity ?? 0;
 
                                 if ($quantity > $stock) {
@@ -96,20 +82,14 @@ class ListUniformIssuances extends ListRecords
                             \Filament\Notifications\Notification::make()
                                 ->title('Insufficient Stock — Issuance not saved.')
                                 ->body(implode("\n", array_slice($insufficient, 0, 5)) . (count($insufficient) > 5 ? "\n...and more." : ''))
-                                ->danger()
-                                ->persistent()
-                                ->send();
+                                ->danger()->persistent()->send();
 
-                            // Halt — throw exception to abort the create action
-                            throw new \Illuminate\Validation\ValidationException(
-                                validator([], []),
-                            );
+                            throw new \Illuminate\Validation\ValidationException(validator([], []));
                         }
                     }
 
                     $issuance = $model::create($data);
 
-                    // ── Disable stock events during item creation to prevent double deduct ──
                     \App\Models\UniformIssuanceItem::$skipStockEvents = true;
 
                     foreach ($employees as $employee) {
@@ -120,31 +100,26 @@ class ListUniformIssuances extends ListRecords
                             'uniform_issuance_id' => $issuance->id,
                             'employee_name'       => $employee['employee_name'],
                             'position_id'         => $employee['position_id'],
-                            'uniform_set_id'      => ($employee['uniform_set_id'] !== 'manual')
-                                                        ? $employee['uniform_set_id']
-                                                        : null,
-                            'mode'                => ($employee['uniform_set_id'] === 'manual')
-                                                        ? 'manual'
-                                                        : 'auto',
+                            'uniform_set_id'      => ($employee['uniform_set_id'] !== 'manual') ? $employee['uniform_set_id'] : null,
+                            'mode'                => ($employee['uniform_set_id'] === 'manual') ? 'manual' : 'auto',
                         ]);
 
                         foreach ($items as $item) {
                             UniformIssuanceItem::create([
                                 'uniform_issuance_recipient_id' => $recipient->id,
-                                'item_id'                       => $item['item_id'],
-                                'size'                          => $item['size'] ?? null,
-                                'quantity'                      => $item['quantity'] ?? 1,
-                                'released_quantity'             => 0,
-                                'remaining_quantity'            => $item['quantity'] ?? 1,
+                                'item_id'             => $item['item_id'],
+                                'size'                => $item['size'] ?? null,
+                                'quantity'            => $item['quantity'] ?? 1,
+                                'released_quantity'   => 0,
+                                'remaining_quantity'  => $item['quantity'] ?? 1,
                             ]);
                         }
                     }
 
-                    // ── Re-enable stock events ────────────────────────────────────────────
                     \App\Models\UniformIssuanceItem::$skipStockEvents = false;
 
-                    // ── Manually deduct stock if status requires it ───────────────────────
-                    if (in_array($issuance->status, ['released', 'partial', 'issued'])) {
+                    // ── Deduct stock if status requires it ────────────────────
+                    if (in_array($issuance->status, ['partial', 'issued'])) {
                         $issuance->loadMissing('recipients.items');
 
                         foreach ($issuance->recipients as $recipient) {
@@ -172,50 +147,62 @@ class ListUniformIssuances extends ListRecords
                     }
 
                     return $issuance;
+                })
+                ->after(function ($record) {
+                    // Notify with print link for partial, issued, returned
+                    if (in_array($record->status, ['partial', 'issued'])) {
+                        $url = url("/receiving-copy/issuance/{$record->id}");
+
+                        $isPartial = $record->status === 'partial';
+
+                        Notification::make()
+                            ->title($isPartial
+                                ? '📋 Partial Issuance Created — Receiving Copy Ready'
+                                : '✅ Issuance Created — Receiving Copy Ready'
+                            )
+                            ->body($isPartial
+                                ? 'Created with status "Partial". You can print the receiving copy for this release.'
+                                : 'Created with status "Issued". You can now print or download the receiving copy.'
+                            )
+                            ->success()
+                            ->persistent()
+                            ->actions([
+                                Action::make('view_receiving_copy')
+                                    ->label('🖨️ Open Receiving Copy')
+                                    ->url($url, shouldOpenInNewTab: true)
+                                    ->button(),
+                            ])
+                            ->send();
+                    }
                 }),
         ];
     }
-
-    // -------------------------------------------------------------------------
-    // Tabs
-    // -------------------------------------------------------------------------
 
     public function getTabs(): array
     {
         $counts = $this->getStatusCounts();
 
         return [
-            'all' => Tab::make('All')
-                ->badge($counts['all'] ?? 0),
+            'all' => Tab::make('All')->badge($counts['all'] ?? 0),
 
             'pending' => Tab::make('Pending')
-                ->badge($counts['pending'] ?? 0)
-                ->badgeColor('warning')
+                ->badge($counts['pending'] ?? 0)->badgeColor('warning')
                 ->modifyQueryUsing(fn (Builder $query) => $query->where('status', 'pending')),
 
             'partial' => Tab::make('Partial')
-                ->badge($counts['partial'] ?? 0)
-                ->badgeColor('primary')
+                ->badge($counts['partial'] ?? 0)->badgeColor('primary')
                 ->modifyQueryUsing(fn (Builder $query) => $query->where('status', 'partial')),
 
-            'released' => Tab::make('Released')
-                ->badge($counts['released'] ?? 0)
-                ->badgeColor('info')
-                ->modifyQueryUsing(fn (Builder $query) => $query->where('status', 'released')),
-
             'issued' => Tab::make('Issued')
-                ->badge($counts['issued'] ?? 0)
-                ->badgeColor('success')
+                ->badge($counts['issued'] ?? 0)->badgeColor('success')
                 ->modifyQueryUsing(fn (Builder $query) => $query->where('status', 'issued')),
 
             'returned' => Tab::make('Returned')
-                ->badge($counts['returned'] ?? 0)
-                ->badgeColor('gray')
+                ->badge($counts['returned'] ?? 0)->badgeColor('gray')
                 ->modifyQueryUsing(fn (Builder $query) => $query->where('status', 'returned')),
 
             'cancelled' => Tab::make('Cancelled')
-                ->badge($counts['cancelled'] ?? 0)
-                ->badgeColor('danger')
+                ->badge($counts['cancelled'] ?? 0)->badgeColor('danger')
                 ->modifyQueryUsing(fn (Builder $query) => $query->where('status', 'cancelled')),
         ];
     }

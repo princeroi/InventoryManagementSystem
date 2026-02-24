@@ -10,12 +10,11 @@ use App\Models\IssuanceLog;
 class Issuance extends Model
 {
     protected $fillable = [
-        'department_id',  
+        'department_id',
         'site_id',
         'issued_to',
         'status',
         'pending_at',
-        'released_at',
         'issued_at',
         'partial_at',
         'returned_at',
@@ -26,7 +25,6 @@ class Issuance extends Model
 
     protected $casts = [
         'pending_at'   => 'date',
-        'released_at'  => 'date',
         'issued_at'    => 'date',
         'partial_at'   => 'date',
         'returned_at'  => 'date',
@@ -36,11 +34,10 @@ class Issuance extends Model
     public ?array $logSnapshot = null;
     public bool $forceLog      = false;
 
-    public function department():BelongsTo
+    public function department(): BelongsTo
     {
         return $this->belongsTo(Department::class);
     }
-
 
     // -------------------------------------------------------------------------
     // Relationships
@@ -60,7 +57,6 @@ class Issuance extends Model
     {
         return $this->hasMany(IssuanceLog::class)->orderBy('created_at', 'desc');
     }
-
 
     // -------------------------------------------------------------------------
     // Accessors
@@ -83,9 +79,8 @@ class Issuance extends Model
     {
         return match ($this->status) {
             'pending'   => $this->pending_at,
-            'released'  => $this->released_at,
-            'issued'    => $this->issued_at,
             'partial'   => $this->partial_at,
+            'issued'    => $this->issued_at,
             'returned'  => $this->returned_at,
             'cancelled' => $this->cancelled_at,
             default     => null,
@@ -98,7 +93,7 @@ class Issuance extends Model
 
     /**
      * Deduct stock for all items on this issuance.
-     * Used when status changes TO issued/released via the Edit modal.
+     * Used when status changes TO issued via the Edit modal.
      */
     public function deductStock(): void
     {
@@ -115,7 +110,7 @@ class Issuance extends Model
 
     /**
      * Restore stock for all items on this issuance.
-     * Used when status reverts AWAY from issued/released via the Edit modal.
+     * Used when status reverts AWAY from issued via the Edit modal.
      */
     public function restoreStock(): void
     {
@@ -129,7 +124,6 @@ class Issuance extends Model
             $variant?->increment('quantity', $item->quantity);
         }
     }
-    
 
     // -------------------------------------------------------------------------
     // Model Events
@@ -142,7 +136,6 @@ class Issuance extends Model
             if ($issuance->isDirty('status')) {
                 $column = match ($issuance->status) {
                     'pending'   => 'pending_at',
-                    'released'  => 'released_at',
                     'issued'    => 'issued_at',
                     'partial'   => 'partial_at',
                     'returned'  => 'returned_at',
@@ -165,7 +158,6 @@ class Issuance extends Model
         static::created(function (self $issuance) {
             $action = match ($issuance->status) {
                 'pending'   => 'pending',
-                'released'  => 'released',
                 'issued'    => 'issued',
                 'partial'   => 'partial',
                 'returned'  => 'returned',
@@ -187,12 +179,14 @@ class Issuance extends Model
                 $newStatus = $issuance->status;
                 $oldStatus = $issuance->getOriginal('status');
 
-                $stockStatuses    = ['issued', 'released'];
+                $stockStatuses    = ['issued'];
                 $wasStockConsumed = in_array($oldStatus, $stockStatuses);
                 $isStockConsumed  = in_array($newStatus, $stockStatuses);
+
                 if ($isStockConsumed && ! $wasStockConsumed && $issuance->logSnapshot === null) {
                     $issuance->deductStock();
                 }
+
                 if (! $isStockConsumed && $wasStockConsumed && $issuance->logSnapshot === null) {
                     $issuance->restoreStock();
                 }

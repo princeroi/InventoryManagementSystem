@@ -5,7 +5,6 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
-use Illuminate\Database\Eloquent\Relations\HasManyThrough;
 use App\Models\UniformIssuanceLog;
 
 class UniformIssuance extends Model
@@ -16,7 +15,6 @@ class UniformIssuance extends Model
         'issuance_type_id',
         'status',
         'pending_at',
-        'released_at',
         'partial_at',
         'issued_at',
         'returned_at',
@@ -25,7 +23,6 @@ class UniformIssuance extends Model
 
     protected $casts = [
         'pending_at'   => 'date',
-        'released_at'  => 'date',
         'partial_at'   => 'date',
         'issued_at'    => 'date',
         'returned_at'  => 'date',
@@ -98,7 +95,6 @@ class UniformIssuance extends Model
             if ($issuance->isDirty('status')) {
                 $column = match ($issuance->status) {
                     'pending'   => 'pending_at',
-                    'released'  => 'released_at',
                     'partial'   => 'partial_at',
                     'issued'    => 'issued_at',
                     'returned'  => 'returned_at',
@@ -115,7 +111,6 @@ class UniformIssuance extends Model
         static::created(function (self $issuance) {
             $action = match ($issuance->status) {
                 'pending'   => 'pending',
-                'released'  => 'released',
                 'partial'   => 'partial',
                 'issued'    => 'issued',
                 'returned'  => 'returned',
@@ -136,9 +131,9 @@ class UniformIssuance extends Model
                 $newStatus = $issuance->status;
                 $oldStatus = $issuance->getOriginal('status');
 
-                $stockStatuses    = ['issued', 'released'];
-                $wasStockConsumed = in_array($oldStatus, $stockStatuses);
-                $isStockConsumed  = in_array($newStatus, $stockStatuses);
+                // issued is the only stock-consuming status now
+                $wasStockConsumed = $oldStatus === 'issued';
+                $isStockConsumed  = $newStatus === 'issued';
 
                 if ($isStockConsumed && ! $wasStockConsumed && $issuance->logSnapshot === null) {
                     $issuance->deductStock();

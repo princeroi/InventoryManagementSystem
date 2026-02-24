@@ -42,7 +42,7 @@ class IssuanceItem extends Model
 
             if (! $issuance) return;
 
-            if (in_array($issuance->status, ['issued', 'released'])) {
+            if ($issuance->status === 'issued') {
                 self::adjustStock($issuanceItem, 'decrement');
             }
         });
@@ -55,7 +55,7 @@ class IssuanceItem extends Model
 
             if (! $issuance) return;
 
-            if (in_array($issuance->status, ['issued', 'released'])) {
+            if ($issuance->status === 'issued') {
                 self::adjustStock($issuanceItem, 'increment');
             }
         });
@@ -72,7 +72,7 @@ class IssuanceItem extends Model
 
             if (! $issuance) return;
 
-            if (! in_array($issuance->status, ['issued', 'released'])) {
+            if ($issuance->status !== 'issued') {
                 return;
             }
 

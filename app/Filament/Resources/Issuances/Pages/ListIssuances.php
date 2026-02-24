@@ -70,7 +70,7 @@ class ListIssuances extends ListRecords
                 ->after(function ($record) use (&$cachedItems): void {
 
                     // ── Stock validation BEFORE inserting items ───────────────
-                    if (in_array($record->status, ['released', 'issued'])) {
+                    if ($record->status === 'issued') {
                         $insufficient = [];
 
                         foreach ($cachedItems as $itemRow) {
@@ -145,7 +145,7 @@ class ListIssuances extends ListRecords
                         IssuanceItem::insert($rows);
 
                         // ── Deduct stock if status requires it ────────────────
-                        if (in_array($record->status, ['issued', 'released'])) {
+                        if ($record->status === 'issued') {
                             $this->deductStockForRows($rows);
                         }
                     }
@@ -201,10 +201,10 @@ class ListIssuances extends ListRecords
                 ->badgeColor('warning')
                 ->modifyQueryUsing(fn (Builder $query) => $query->where('status', 'pending')),
 
-            'released' => Tab::make('Released')
-                ->badge($counts['released'] ?? 0)
-                ->badgeColor('info')
-                ->modifyQueryUsing(fn (Builder $query) => $query->where('status', 'released')),
+            'partial' => Tab::make('Partial')
+                ->badge($counts['partial'] ?? 0)
+                ->badgeColor('primary')
+                ->modifyQueryUsing(fn (Builder $query) => $query->where('status', 'partial')),
 
             'issued' => Tab::make('Issued')
                 ->badge($counts['issued'] ?? 0)

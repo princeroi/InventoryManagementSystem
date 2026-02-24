@@ -50,9 +50,8 @@ class IssuanceForm
 
                 Select::make('status')
                     ->options([
-                        'pending'   => 'Pending',
-                        'released'  => 'Released',
-                        'issued'    => 'Issued',
+                        'pending' => 'Pending',
+                        'issued'  => 'Issued',
                     ])
                     ->default('pending')
                     ->live()
@@ -60,7 +59,6 @@ class IssuanceForm
                         $now = now()->toDateString();
                         match ($state) {
                             'pending'   => $set('pending_at', $now),
-                            'released'  => $set('released_at', $now),
                             'issued'    => $set('issued_at', $now),
                             'returned'  => $set('returned_at', $now),
                             'cancelled' => $set('cancelled_at', $now),
@@ -74,11 +72,6 @@ class IssuanceForm
                     ->default(now())
                     ->visible(fn (callable $get) => $get('status') === 'pending')
                     ->required(fn (callable $get) => $get('status') === 'pending'),
-
-                DatePicker::make('released_at')
-                    ->label('Released Date')
-                    ->visible(fn (callable $get) => $get('status') === 'released')
-                    ->required(fn (callable $get) => $get('status') === 'released'),
 
                 DatePicker::make('issued_at')
                     ->label('Issued Date')
@@ -224,8 +217,8 @@ class IssuanceForm
                                             ");
                                         }
 
-                                        // Insufficient — hard block for stock-consuming statuses
-                                        $isHard = in_array($status, ['issued', 'released']);
+                                        // Insufficient — hard block for stock-consuming status
+                                        $isHard = $status === 'issued';
 
                                         if ($isHard) {
                                             return new HtmlString("

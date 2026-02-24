@@ -7,7 +7,6 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class UniformIssuanceItem extends Model
 {
-    // ── Static flag to skip stock events during bulk create flow ─────────────
     public static bool $skipStockEvents = false;
 
     protected $fillable = [
@@ -31,34 +30,29 @@ class UniformIssuanceItem extends Model
 
     protected static function booted(): void
     {
-        // ── created ──────────────────────────────────────────────────────────
-        // Only fires for EDIT flow (adding a new item row to an existing issuance).
-        // CREATE flow sets skipStockEvents = true before creating items,
-        // then handles deduction manually after all items are saved.
         static::created(function (self $item) {
             if (self::$skipStockEvents) return;
 
             $issuance = $item->recipient?->uniformIssuance;
             if (! $issuance) return;
 
-            if (in_array($issuance->status, ['issued', 'released'])) {
+            // Only 'issued' deducts stock now
+            if ($issuance->status === 'issued') {
                 self::adjustStock($item, 'decrement');
             }
         });
 
-        // ── deleted ──────────────────────────────────────────────────────────
         static::deleted(function (self $item) {
             if (self::$skipStockEvents) return;
 
             $issuance = $item->recipient?->uniformIssuance;
             if (! $issuance) return;
 
-            if (in_array($issuance->status, ['issued', 'released'])) {
+            if ($issuance->status === 'issued') {
                 self::adjustStock($item, 'increment');
             }
         });
 
-        // ── updated ──────────────────────────────────────────────────────────
         static::updated(function (self $item) {
             if (self::$skipStockEvents) return;
             if (! $item->isDirty('quantity')) return;
@@ -66,7 +60,7 @@ class UniformIssuanceItem extends Model
             $issuance = $item->recipient?->uniformIssuance;
             if (! $issuance) return;
 
-            if (! in_array($issuance->status, ['issued', 'released'])) return;
+            if ($issuance->status !== 'issued') return;
 
             $oldQty = $item->getOriginal('quantity');
             $newQty = $item->quantity;

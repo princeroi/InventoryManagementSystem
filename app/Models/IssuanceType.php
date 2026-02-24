@@ -11,6 +11,11 @@ class IssuanceType extends Model
         'department_id',
         'name',
         'description',
+        'is_salary_deduct',
+    ];
+
+    protected $casts = [
+        'is_salary_deduct' => 'boolean',
     ];
 
     public function department(): BelongsTo
