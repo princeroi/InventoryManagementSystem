@@ -53,7 +53,6 @@ class IssuanceForm
                         'pending'   => 'Pending',
                         'released'  => 'Released',
                         'issued'    => 'Issued',
-                        'returned'  => 'Returned',
                     ])
                     ->default('pending')
                     ->live()
@@ -203,32 +202,66 @@ class IssuanceForm
 
                                         if (! $itemId || ! $size) return null;
 
-                                        // Always live from DB — no cache
                                         $variants = self::variantsForItem($itemId);
                                         $stock    = $variants[$size]['quantity'] ?? 0;
 
-                                        if ($quantity > 0 && $quantity > $stock) {
-                                            $isHard  = in_array($status, ['issued', 'released']);
-                                            $color   = $isHard ? 'danger' : 'warning';
-                                            $message = $isHard
-                                                ? "🚫 Current stock is <strong>{$stock}</strong>. Save as pending or decrease quantity."
-                                                : "⚠️ Current stock is <strong>{$stock}</strong>. You can save as pending but cannot issue/release until stock is sufficient.";
-
-                                            return new HtmlString(
-                                                "<div class='text-sm font-medium text-{$color}-700
-                                                    bg-{$color}-50 border border-{$color}-300
-                                                    rounded-lg px-3 py-2 mt-1'>
-                                                    {$message}
-                                                </div>"
-                                            );
+                                        // Enough stock
+                                        if ($quantity <= $stock || $quantity === 0) {
+                                            return new HtmlString("
+                                                <div style='
+                                                    font-size:12px;
+                                                    color:#059669;
+                                                    background:#ecfdf5;
+                                                    border:1px solid #a7f3d0;
+                                                    border-radius:6px;
+                                                    padding:6px 12px;
+                                                    display:flex;
+                                                    align-items:center;
+                                                    gap:6px;
+                                                '>
+                                                    ✅ Stock available: <strong>{$stock}</strong>
+                                                </div>
+                                            ");
                                         }
 
-                                        return new HtmlString(
-                                            "<div class='text-sm text-gray-600 bg-gray-50 border
-                                                border-gray-200 rounded-lg px-3 py-2 mt-1'>
-                                                📦 Current stock: <strong>{$stock}</strong>
-                                            </div>"
-                                        );
+                                        // Insufficient — hard block for stock-consuming statuses
+                                        $isHard = in_array($status, ['issued', 'released']);
+
+                                        if ($isHard) {
+                                            return new HtmlString("
+                                                <div style='
+                                                    font-size:12px;
+                                                    color:#dc2626;
+                                                    background:#fef2f2;
+                                                    border:1px solid #fecaca;
+                                                    border-radius:6px;
+                                                    padding:6px 12px;
+                                                    display:flex;
+                                                    align-items:center;
+                                                    gap:6px;
+                                                '>
+                                                    🚫 Insufficient stock: <strong>{$stock}</strong> available, <strong>{$quantity}</strong> requested.
+                                                    Change status to <strong>Pending</strong> or reduce quantity.
+                                                </div>
+                                            ");
+                                        }
+
+                                        return new HtmlString("
+                                            <div style='
+                                                font-size:12px;
+                                                color:#d97706;
+                                                background:#fffbeb;
+                                                border:1px solid #fde68a;
+                                                border-radius:6px;
+                                                padding:6px 12px;
+                                                display:flex;
+                                                align-items:center;
+                                                gap:6px;
+                                            '>
+                                                ⚠️ Stock is <strong>{$stock}</strong>, requested <strong>{$quantity}</strong>.
+                                                You can save as <strong>Pending</strong> only.
+                                            </div>
+                                        ");
                                     }),
                             ])
                             ->defaultItems(1)

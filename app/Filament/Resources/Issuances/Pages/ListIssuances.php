@@ -6,6 +6,7 @@ use App\Filament\Resources\Issuances\IssuanceResource;
 use App\Models\Issuance;
 use App\Models\IssuanceItem;
 use App\Models\ItemVariant;
+use App\Models\Item;
 use Filament\Actions\CreateAction;
 use Filament\Resources\Pages\ListRecords;
 use Filament\Schemas\Components\Tabs;
@@ -14,6 +15,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Filament\Facades\Filament;
+use Filament\Notifications\Notification;
 
 class ListIssuances extends ListRecords
 {
@@ -62,10 +64,57 @@ class ListIssuances extends ListRecords
                 ->mutateFormDataUsing(function (array $data) use (&$cachedItems): array {
                     $cachedItems = $data['issuance_items'] ?? [];
                     unset($data['issuance_items']);
-                    $data['department_id'] = Filament::getTenant()->id;  // ← ADD THIS
+                    $data['department_id'] = Filament::getTenant()->id;
                     return $data;
                 })
                 ->after(function ($record) use (&$cachedItems): void {
+
+                    // ── Stock validation BEFORE inserting items ───────────────
+                    if (in_array($record->status, ['released', 'issued'])) {
+                        $insufficient = [];
+
+                        foreach ($cachedItems as $itemRow) {
+                            $itemId = $itemRow['item_id'] ?? null;
+                            if (! $itemId) continue;
+
+                            foreach ($itemRow['sizes'] ?? [] as $sizeRow) {
+                                $size     = $sizeRow['size'] ?? null;
+                                $quantity = (int) ($sizeRow['quantity'] ?? 0);
+
+                                if (! $size || $quantity <= 0) continue;
+
+                                $stock = ItemVariant::where('item_id', $itemId)
+                                    ->where('size_label', $size)
+                                    ->value('quantity') ?? 0;
+
+                                if ($quantity > $stock) {
+                                    $itemName       = Item::find($itemId)?->name ?? "Item #{$itemId}";
+                                    $insufficient[] = "{$itemName} ({$size}): needs {$quantity}, has {$stock}";
+                                }
+                            }
+                        }
+
+                        if (! empty($insufficient)) {
+                            // Rollback — delete the issuance already created
+                            $record->delete();
+
+                            Notification::make()
+                                ->title('Insufficient Stock — Issuance not saved.')
+                                ->body(
+                                    implode("\n", array_slice($insufficient, 0, 5)) .
+                                    (count($insufficient) > 5 ? "\n...and more." : '')
+                                )
+                                ->danger()
+                                ->persistent()
+                                ->send();
+
+                            throw new \Illuminate\Validation\ValidationException(
+                                validator([], []),
+                            );
+                        }
+                    }
+
+                    // ── Insert items ──────────────────────────────────────────
                     $rows = [];
                     $now  = now();
 
@@ -91,14 +140,11 @@ class ListIssuances extends ListRecords
                     }
 
                     if (! empty($rows)) {
-                        // insert() bypasses model events, so we handle
-                        // everything manually here.
+                        // insert() bypasses model events — stock deduction
+                        // is handled manually below.
                         IssuanceItem::insert($rows);
 
                         // ── Deduct stock if status requires it ────────────────
-                        // Since insert() skips IssuanceItem::created events,
-                        // we manually deduct stock here when the issuance is
-                        // created directly as 'issued' or 'released'.
                         if (in_array($record->status, ['issued', 'released'])) {
                             $this->deductStockForRows($rows);
                         }
@@ -112,15 +158,15 @@ class ListIssuances extends ListRecords
     // -------------------------------------------------------------------------
 
     /**
-     * Deduct stock for a set of raw item rows (as used after insert()).
-     * Groups by item_id + size to minimize queries.
+     * Deduct stock for a set of raw item rows (used after insert()).
+     * Aggregates quantities per item_id + size to minimise queries.
      *
      * @param array $rows  Array of ['item_id' => ..., 'size' => ..., 'quantity' => ...]
      */
     private function deductStockForRows(array $rows): void
     {
-        // Aggregate quantities per item_id + size in case of duplicates
         $aggregated = [];
+
         foreach ($rows as $row) {
             $key = "{$row['item_id']}:{$row['size']}";
             $aggregated[$key] = [
@@ -131,11 +177,10 @@ class ListIssuances extends ListRecords
         }
 
         foreach ($aggregated as $entry) {
-            $variant = ItemVariant::where('item_id', $entry['item_id'])
+            ItemVariant::where('item_id', $entry['item_id'])
                 ->where('size_label', $entry['size'])
-                ->first();
-
-            $variant?->decrement('quantity', $entry['quantity']);
+                ->first()
+                ?->decrement('quantity', $entry['quantity']);
         }
     }
 

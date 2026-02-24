@@ -42,7 +42,7 @@ class UniformSetForm
                     ->label('Uniform Items')
                     ->relationship('items')
                     ->columnSpanFull()
-                    ->columns(3)
+                    ->columns(2) // only 2 columns now since size is removed
                     ->schema([
                         Select::make('item_id')
                             ->label('Item')
@@ -54,20 +54,7 @@ class UniformSetForm
                             })
                             ->searchable()
                             ->live()
-                            ->afterStateUpdated(fn (callable $set) => $set('size', null))
                             ->required(),
-
-                        Select::make('size')
-                            ->label('Size')
-                            ->options(function (callable $get) {
-                                $itemId = $get('item_id');
-                                if (! $itemId) return [];
-                                return ItemVariant::where('item_id', $itemId)
-                                    ->pluck('size_label', 'size_label')
-                                    ->toArray();
-                            })
-                            ->live()
-                            ->nullable(),
 
                         TextInput::make('quantity')
                             ->numeric()
