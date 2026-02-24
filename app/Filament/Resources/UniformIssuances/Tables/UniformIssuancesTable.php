@@ -943,7 +943,6 @@ class UniformIssuancesTable
 
             ->toolbarActions([
                 BulkActionGroup::make([
-
                     // ── BULK ISSUE ────────────────────────────────────────────
                     BulkAction::make('bulk_issue')
                         ->label('Issue Selected')
