@@ -6,6 +6,7 @@ use App\Filament\Resources\UniformIssuances\UniformIssuanceResource;
 use App\Models\UniformIssuanceRecipient;
 use App\Models\UniformIssuanceItem;
 use App\Models\UniformIssuanceLog;
+use App\Models\Transmittal;
 use App\Models\ItemVariant;
 use Filament\Actions\CreateAction;
 use Filament\Resources\Pages\ListRecords;
@@ -50,7 +51,10 @@ class ListUniformIssuances extends ListRecords
                     return $data;
                 })
                 ->using(function (array $data, string $model): \App\Models\UniformIssuance {
-                    $employees = $data['employees'] ?? [];
+                    $employees     = $data['employees'] ?? [];
+                    $isForTransmit = (bool) ($data['is_for_transmit'] ?? false);
+                    $transmittedTo = trim($data['transmitted_to'] ?? '');
+
                     unset($data['employees']);
 
                     // ── Stock validation ──────────────────────────────────────
@@ -79,7 +83,7 @@ class ListUniformIssuances extends ListRecords
                         }
 
                         if (! empty($insufficient)) {
-                            \Filament\Notifications\Notification::make()
+                            Notification::make()
                                 ->title('Insufficient Stock — Issuance not saved.')
                                 ->body(implode("\n", array_slice($insufficient, 0, 5)) . (count($insufficient) > 5 ? "\n...and more." : ''))
                                 ->danger()->persistent()->send();
@@ -88,6 +92,7 @@ class ListUniformIssuances extends ListRecords
                         }
                     }
 
+                    // ── Create the issuance ───────────────────────────────────
                     $issuance = $model::create($data);
 
                     \App\Models\UniformIssuanceItem::$skipStockEvents = true;
@@ -146,13 +151,43 @@ class ListUniformIssuances extends ListRecords
                         ]);
                     }
 
+                    // ── Auto-create Transmittal only if flagged AND status is issued ──
+                    if ($isForTransmit && $transmittedTo && $issuance->status === 'issued') {
+                        $tenant = Filament::getTenant();
+                        $user   = auth()->user();
+
+                        $transmittal = Transmittal::create([
+                            'transmittal_number'     => Transmittal::generateNumber($tenant->id),
+                            'department_id'          => $tenant->id,
+                            'transmitted_by'         => $user?->name ?? 'System',
+                            'transmitted_by_user_id' => $user?->id,
+                            'transmitted_to'         => $transmittedTo,
+                            'items_summary'          => Transmittal::buildSummaryFromIssuance($issuance),
+                        ]);
+
+                        // Link transmittal back to the issuance (quiet — no log event)
+                        $issuance->updateQuietly(['transmittal_id' => $transmittal->id]);
+                    }
+
                     return $issuance;
                 })
                 ->after(function ($record) {
-                    // Notify with print link for partial, issued, returned
-                    if (in_array($record->status, ['partial', 'issued'])) {
-                        $url = url("/receiving-copy/issuance/{$record->id}");
+                    // ── Transmittal notification ──────────────────────────────
+                    if ($record->transmittal_id) {
+                        $record->loadMissing('transmittal');
+                        $txnNo = $record->transmittal?->transmittal_number;
 
+                        Notification::make()
+                            ->title("📮 Transmittal {$txnNo} Created")
+                            ->body("Transmitted to: {$record->transmitted_to}")
+                            ->success()
+                            ->persistent()
+                            ->send();
+                    }
+
+                    // ── Receiving copy notification ───────────────────────────
+                    if (in_array($record->status, ['partial', 'issued'])) {
+                        $url       = url("/receiving-copy/issuance/{$record->id}");
                         $isPartial = $record->status === 'partial';
 
                         Notification::make()

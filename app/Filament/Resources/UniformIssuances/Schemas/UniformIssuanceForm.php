@@ -7,6 +7,8 @@ use Filament\Forms\Components\Repeater;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\Placeholder;
+use Filament\Forms\Components\Toggle;
+use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
 use App\Models\IssuanceType;
 use App\Models\Item;
@@ -17,10 +19,6 @@ use App\Models\UniformSetItem;
 use Filament\Facades\Filament;
 use Filament\Notifications\Notification;
 use Illuminate\Support\HtmlString;
-use Filament\Actions\ActionGroup;
-use Filament\Actions\BulkAction;
-use Filament\Actions\BulkActionGroup;
-use Filament\Actions\EditAction;
 use Filament\Actions\Action;
 
 
@@ -35,7 +33,6 @@ class UniformIssuanceForm
             ->value('quantity') ?? 0;
     }
 
-    // ── Build the live subtotal + stock warning HTML panel ────────────────────
     private static function buildSubtotalHtml(array $employees): HtmlString
     {
         $aggregated = [];
@@ -73,9 +70,7 @@ class UniformIssuanceForm
             ");
         }
 
-        $rows      = '';
-        $hasWarn   = false;
-        $hasDanger = false;
+        $rows = ''; $hasWarn = false; $hasDanger = false;
 
         foreach ($aggregated as $row) {
             $label = e($row['label']);
@@ -85,19 +80,16 @@ class UniformIssuanceForm
 
             if ($diff < 0) {
                 $hasDanger  = true;
-                $statusIcon = '🚫';
-                $qtyColor   = '#dc2626'; $qtyBg = '#fef2f2'; $qtyBorder = '#fecaca';
+                $statusIcon = '🚫'; $qtyColor = '#dc2626'; $qtyBg = '#fef2f2'; $qtyBorder = '#fecaca';
                 $stockColor = '#dc2626'; $rowBorder = '#fecaca'; $rowBg = '#fff5f5';
                 $diffHtml   = "<span style='color:#dc2626;font-weight:700;font-size:11px;'>".abs($diff)." short</span>";
             } elseif ($diff === 0) {
                 $hasWarn    = true;
-                $statusIcon = '⚠️';
-                $qtyColor   = '#d97706'; $qtyBg = '#fffbeb'; $qtyBorder = '#fde68a';
+                $statusIcon = '⚠️'; $qtyColor = '#d97706'; $qtyBg = '#fffbeb'; $qtyBorder = '#fde68a';
                 $stockColor = '#d97706'; $rowBorder = '#fde68a'; $rowBg = '#fffdf0';
                 $diffHtml   = "<span style='color:#d97706;font-weight:700;font-size:11px;'>exact</span>";
             } else {
-                $statusIcon = '✅';
-                $qtyColor   = '#059669'; $qtyBg = '#ecfdf5'; $qtyBorder = '#a7f3d0';
+                $statusIcon = '✅'; $qtyColor = '#059669'; $qtyBg = '#ecfdf5'; $qtyBorder = '#a7f3d0';
                 $stockColor = '#374151'; $rowBorder = '#e5e7eb'; $rowBg = '#ffffff';
                 $diffHtml   = "<span style='color:#6b7280;font-size:11px;'>+{$diff} left</span>";
             }
@@ -212,6 +204,65 @@ class UniformIssuanceForm
                     ->visible(fn ($get) => $get('status') === 'cancelled')
                     ->required(fn ($get) => $get('status') === 'cancelled'),
 
+                // ── Transmittal Section ───────────────────────────────────────
+                Section::make('📮 Transmittal')
+                    ->columnSpanFull()
+                    ->collapsible()
+                    ->collapsed(fn ($record) => ! ($record?->is_for_transmit))
+                    ->schema([
+                        // Show existing transmittal number in edit mode
+                        Placeholder::make('existing_transmittal_number')
+                            ->label('Transmittal Number')
+                            ->visible(fn ($record) => (bool) $record?->transmittal_id)
+                            ->content(fn ($record): HtmlString => new HtmlString("
+                                <span style='display:inline-flex;align-items:center;gap:6px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:6px 14px;font-size:13px;font-weight:800;color:#1d4ed8;letter-spacing:.04em;'>
+                                    📋 " . e($record?->transmittal?->transmittal_number ?? '—') . "
+                                </span>
+                                <span style='margin-left:8px;font-size:12px;color:#6b7280;'>
+                                    → " . e($record?->transmitted_to ?? '') . "
+                                </span>
+                            "))
+                            ->columnSpanFull(),
+
+                        Toggle::make('is_for_transmit')
+                            ->label('Mark for Transmittal')
+                            ->helperText('A transmittal record (HR-YYYYMMDD-XXXX) will be auto-created and linked to this issuance.')
+                            ->live()
+                            ->default(false)
+                            // Lock the toggle once a transmittal already exists
+                            ->disabled(fn ($record) => (bool) $record?->transmittal_id)
+                            ->columnSpanFull(),
+
+                        TextInput::make('transmitted_to')
+                            ->label('Transmitted To')
+                            ->placeholder('e.g. Main Office, Warehouse, Site B...')
+                            ->required(fn ($get) => (bool) $get('is_for_transmit'))
+                            ->visible(fn ($get, $record) => (bool) $get('is_for_transmit') && ! $record?->transmittal_id)
+                            ->maxLength(255)
+                            ->columnSpanFull(),
+
+                        TextInput::make('transmittal_purpose')
+                            ->label('Purpose')
+                            ->placeholder('FOR ISSUANCE & SIGNATURE')
+                            ->default('FOR ISSUANCE & SIGNATURE')
+                            ->required(fn ($get) => (bool) $get('is_for_transmit'))
+                            ->maxLength(255)
+                            ->visible(fn ($get) => $get('is_for_transmit'))
+                            ->helperText('Printed on the transmittal form under "Purpose". Leave blank to use the default.'),
+
+                        TextInput::make('transmittal_instructions')
+                            ->label('Instructions')
+                            ->placeholder('PLEASE RETURN RECEIVING COPY')
+                            ->default('PLEASE RETURN RECEIVING COPY')
+                            ->required(fn ($get) => (bool) $get('is_for_transmit'))
+                            ->maxLength(255)
+                            ->visible(fn ($get) => $get('is_for_transmit'))
+                            ->helperText('Printed on the transmittal form under "Instructions". Leave blank to use the default.'),
+
+
+                    ])
+                    ->columns(1),
+
                 // ── Employees repeater ────────────────────────────────────────
                 Repeater::make('employees')
                     ->columnSpanFull()
@@ -291,7 +342,7 @@ class UniformIssuanceForm
                             ->required()
                             ->columnSpan(1),
 
-                        // ── Items repeater (headerless single-line rows) ───────
+                        // ── Items repeater ────────────────────────────────────
                         Repeater::make('items')
                             ->live(debounce: 300)
                             ->collapsible(false)
@@ -299,7 +350,7 @@ class UniformIssuanceForm
                             ->defaultItems(0)
                             ->addActionLabel('+ Add Item')
                             ->addable(true)
-                            ->deletable(false)   // native delete hidden; we render our own inline button
+                            ->deletable(false)
                             ->columnSpanFull()
                             ->itemLabel(null)
                             ->extraAttributes([
@@ -307,7 +358,6 @@ class UniformIssuanceForm
                                 'style' => 'background:transparent;',
                             ])
                             ->schema([
-                                // ── Item ──────────────────────────────────────
                                 Select::make('item_id')
                                     ->hiddenLabel()
                                     ->placeholder('Select Item')
@@ -328,7 +378,6 @@ class UniformIssuanceForm
                                     })
                                     ->columnSpan(4),
 
-                                // ── Size ──────────────────────────────────────
                                 Select::make('size')
                                     ->hiddenLabel()
                                     ->placeholder('Size')
@@ -367,7 +416,6 @@ class UniformIssuanceForm
                                     })
                                     ->columnSpan(3),
 
-                                // ── Quantity ──────────────────────────────────
                                 TextInput::make('quantity')
                                     ->hiddenLabel()
                                     ->placeholder('Qty')
@@ -378,7 +426,6 @@ class UniformIssuanceForm
                                     ->live(debounce: 400)
                                     ->columnSpan(2),
 
-                                // ── Inline stock badge ────────────────────────
                                 Placeholder::make('stock_warning')
                                     ->hiddenLabel()
                                     ->columnSpan(2)
@@ -417,7 +464,6 @@ class UniformIssuanceForm
                                         ");
                                     }),
 
-                                // ── Inline delete button ──────────────────────
                                 Placeholder::make('_delete')
                                     ->hiddenLabel()
                                     ->columnSpan(1)
@@ -447,7 +493,7 @@ class UniformIssuanceForm
                                         </button>
                                     ")),
                             ])
-                            ->columns(12), // 4+3+2+2+1 = 12
+                            ->columns(12),
                     ])
                     ->columns(3),
 

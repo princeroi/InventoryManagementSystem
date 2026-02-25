@@ -19,14 +19,18 @@ class UniformIssuance extends Model
         'issued_at',
         'returned_at',
         'cancelled_at',
+        'is_for_transmit',
+        'transmitted_to',
+        'transmittal_id',
     ];
 
     protected $casts = [
-        'pending_at'   => 'date',
-        'partial_at'   => 'date',
-        'issued_at'    => 'date',
-        'returned_at'  => 'date',
-        'cancelled_at' => 'date',
+        'pending_at'      => 'date',
+        'partial_at'      => 'date',
+        'issued_at'       => 'date',
+        'returned_at'     => 'date',
+        'cancelled_at'    => 'date',
+        'is_for_transmit' => 'boolean',
     ];
 
     public ?array $logSnapshot = null;
@@ -55,6 +59,11 @@ class UniformIssuance extends Model
     public function logs(): HasMany
     {
         return $this->hasMany(UniformIssuanceLog::class)->orderBy('created_at', 'desc');
+    }
+
+    public function transmittal(): BelongsTo
+    {
+        return $this->belongsTo(Transmittal::class);
     }
 
     public function deductStock(): void
@@ -131,7 +140,6 @@ class UniformIssuance extends Model
                 $newStatus = $issuance->status;
                 $oldStatus = $issuance->getOriginal('status');
 
-                // issued is the only stock-consuming status now
                 $wasStockConsumed = $oldStatus === 'issued';
                 $isStockConsumed  = $newStatus === 'issued';
 

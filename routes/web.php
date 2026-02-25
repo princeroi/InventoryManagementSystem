@@ -27,3 +27,17 @@ Route::middleware(['auth'])->group(function () {
         ->name('receiving-copy.bulk');
 
 });
+
+use App\Http\Controllers\TransmittalCopyController;
+
+Route::middleware(['auth'])->group(function () {
+
+    // Print transmittal form from a Transmittal record
+    Route::get('/transmittal-copy/{transmittal}', [TransmittalCopyController::class, 'show'])
+        ->name('transmittal-copy.show');
+
+    // Print transmittal form from an issuance (uses its linked transmittal)
+    Route::get('/transmittal-copy/issuance/{issuance}', [TransmittalCopyController::class, 'fromIssuance'])
+        ->name('transmittal-copy.issuance');
+
+});

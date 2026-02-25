@@ -18,6 +18,8 @@ use Illuminate\Support\Collection;
 use App\Models\UniformIssuanceLog;
 use App\Models\UniformIssuanceReturnItem;
 use App\Models\ItemVariant;
+use App\Models\Transmittal;
+use Filament\Facades\Filament;
 use Filament\Notifications\Notification;
 
 
@@ -63,6 +65,299 @@ class UniformIssuancesTable
         return json_last_error() === JSON_ERROR_NONE && is_array($decoded);
     }
 
+    /**
+     * If the issuance is flagged for transmittal, has no transmittal yet,
+     * and is now fully issued — create & link the transmittal record.
+     */
+    private static function maybeCreateTransmittal(\App\Models\UniformIssuance $issuance): void
+    {
+        if (
+            ! $issuance->is_for_transmit        // not flagged
+            || $issuance->transmittal_id         // already has one
+            || $issuance->status !== 'issued'    // not fully issued yet
+            || ! $issuance->transmitted_to       // no destination set
+        ) {
+            return;
+        }
+
+        $tenant = Filament::getTenant();
+        $user   = auth()->user();
+
+        $transmittal = Transmittal::create([
+            'transmittal_number'     => Transmittal::generateNumber($tenant->id),
+            'department_id'          => $tenant->id,
+            'transmitted_by'         => $user?->name ?? 'System',
+            'transmitted_by_user_id' => $user?->id,
+            'transmitted_to'         => $issuance->transmitted_to,
+            'items_summary'          => Transmittal::buildSummaryFromIssuance($issuance),
+        ]);
+
+        $issuance->updateQuietly(['transmittal_id' => $transmittal->id]);
+
+        Notification::make()
+            ->title("📮 Transmittal {$transmittal->transmittal_number} Created")
+            ->body("Transmitted to: {$issuance->transmitted_to}")
+            ->success()
+            ->persistent()
+            ->send();
+    }
+
+    private static function buildTransmittalModal($record): array
+{
+    $record->loadMissing(
+        'site',
+        'issuanceType',
+        'transmittal',
+        'recipients.position',
+        'recipients.items.item'
+    );
+
+    // ── Header data ───────────────────────────────────────────────────────────
+    $txn      = $record->transmittal;
+    $txnNo    = $txn?->transmittal_number ?? null;
+    $txnTo    = e($record->transmitted_to ?? $txn?->transmitted_to ?? '—');
+    $txnBy    = e($txn?->transmitted_by ?? auth()->user()?->name ?? '—');
+    $txnDate  = $txn?->created_at
+        ? \Carbon\Carbon::parse($txn->created_at)->timezone('Asia/Manila')->format('F d, Y')
+        : now()->format('F d, Y');
+
+    $siteName         = e($record->site?->name ?? '—');
+    $issuanceTypeName = e($record->issuanceType?->name ?? '—');
+
+    $printUrl = url("/transmittal-copy/issuance/{$record->id}");
+
+    // ── Status badge ──────────────────────────────────────────────────────────
+    $statusBadge = match ($record->status) {
+        'partial'  => ['bg' => '#f59e0b', 'label' => 'PARTIAL'],
+        'issued'   => ['bg' => '#059669', 'label' => 'ISSUED'],
+        'returned' => ['bg' => '#dc2626', 'label' => 'RETURNED'],
+        default    => ['bg' => '#6b7280', 'label' => strtoupper($record->status)],
+    };
+
+    // ── Transmittal number badge ──────────────────────────────────────────────
+    $txnBadgeHtml = $txnNo
+        ? "<span style='background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.3);color:#fff;font-size:11px;font-weight:800;padding:2px 12px;border-radius:999px;letter-spacing:.05em;'>
+               📋 {$txnNo}
+           </span>"
+        : "<span style='background:rgba(255,255,255,.1);color:#fde68a;font-size:10px;font-weight:700;padding:2px 10px;border-radius:999px;'>
+               ⚠ No transmittal number yet
+           </span>";
+
+    // ── Grand totals for the topbar subtitle ─────────────────────────────────
+    $totalLines = 0;
+    $totalPcs   = 0;
+    foreach ($record->recipients as $recipient) {
+        foreach ($recipient->items as $item) {
+            $qty = (int) ($item->released_quantity ?: $item->quantity);
+            if ($qty <= 0) continue;
+            $totalLines++;
+            $totalPcs += $qty;
+        }
+    }
+
+    $fields = [];
+
+    // ── TOPBAR placeholder (mirrors rc_topbar) ────────────────────────────────
+    $fields[] = \Filament\Forms\Components\Placeholder::make('tx_topbar')
+        ->label('')
+        ->columnSpanFull()
+        ->content(new \Illuminate\Support\HtmlString("
+            <div style='
+                display:flex;align-items:center;justify-content:space-between;
+                padding:12px 16px;
+                background:linear-gradient(to right,#1e3a5f,#1d4ed8);
+                border-radius:10px;
+                margin-bottom:16px;
+            '>
+                <div>
+                    <div style='display:flex;align-items:center;gap:8px;margin-bottom:4px;'>
+                        <div style='font-size:14px;font-weight:800;color:#fff;'>📮 Transmittal Form</div>
+                        <span style='background:{$statusBadge['bg']};color:#fff;font-size:9px;font-weight:800;padding:2px 10px;border-radius:999px;letter-spacing:.06em;'>
+                            {$statusBadge['label']}
+                        </span>
+                        {$txnBadgeHtml}
+                    </div>
+                    <div style='font-size:11px;color:#93c5fd;margin-top:2px;'>
+                        {$siteName} &nbsp;·&nbsp; {$issuanceTypeName} &nbsp;·&nbsp; {$txnDate}
+                        &nbsp;·&nbsp; To: <strong style='color:#fff;'>{$txnTo}</strong>
+                        &nbsp;·&nbsp; By: <strong style='color:#fff;'>{$txnBy}</strong>
+                        &nbsp;·&nbsp; <strong style='color:#fff;'>{$totalLines}</strong> line(s)
+                        &nbsp;·&nbsp; <strong style='color:#fff;'>{$totalPcs}</strong> pc(s)
+                    </div>
+                </div>
+                <a
+                    href='{$printUrl}'
+                    target='_blank'
+                    style='display:inline-flex;align-items:center;gap:7px;padding:9px 18px;background:#fff;color:#1e3a5f;border-radius:8px;font-size:12px;font-weight:800;text-decoration:none;flex-shrink:0;'
+                    onmouseover=\"this.style.opacity='.88'\"
+                    onmouseout=\"this.style.opacity='1'\"
+                >
+                    <svg width='14' height='14' fill='none' stroke='currentColor' stroke-width='2' viewBox='0 0 24 24'>
+                        <polyline points='6 9 6 2 18 2 18 9'/>
+                        <path d='M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2'/>
+                        <rect x='6' y='14' width='12' height='8'/>
+                    </svg>
+                    Print Transmittal
+                </a>
+            </div>
+        "));
+
+    // ── Per-employee cards ────────────────────────────────────────────────────
+    $recipients   = $record->recipients;
+    $recipientCnt = $recipients->count();
+
+    if ($recipientCnt === 0) {
+        $fields[] = \Filament\Forms\Components\Placeholder::make('tx_empty')
+            ->label('')
+            ->columnSpanFull()
+            ->content(new \Illuminate\Support\HtmlString("
+                <div style='text-align:center;padding:32px 0;color:#9ca3af;font-size:13px;'>
+                    No recipients found for this issuance.
+                </div>
+            "));
+        return $fields;
+    }
+
+    foreach ($recipients as $idx => $recipient) {
+        $empName  = e($recipient->employee_name ?? 'Unknown Employee');
+        $posName  = e($recipient->position?->name ?? '—');
+        $txnId    = e($recipient->transaction_id ?? '—');
+        $isLast   = $idx === $recipientCnt - 1;
+        $mb       = $isLast ? '0' : '12px';
+
+        // Build item rows for this employee
+        $empTotal    = 0;
+        $itemRowsHtml = '';
+
+        foreach ($recipient->items as $ii => $item) {
+            $qty = (int) ($item->released_quantity ?: $item->quantity);
+            if ($qty <= 0) continue;
+
+            $empTotal  += $qty;
+            $itemName   = e($item->item?->name ?? "Item #{$item->item_id}");
+            $size       = e($item->size ?? '—');
+            $rowBg      = $ii % 2 === 0 ? '#ffffff' : '#f8fafc';
+
+            $itemRowsHtml .= "
+                <div style='
+                    display:flex;justify-content:space-between;align-items:center;
+                    padding:5px 0;
+                    border-bottom:1px solid #f1f5f9;
+                    background:{$rowBg};
+                '>
+                    <div style='display:flex;align-items:center;gap:8px;padding:0 12px;flex:1;'>
+                        <div style='width:6px;height:6px;border-radius:50%;background:#6366f1;flex-shrink:0;'></div>
+                        <span style='font-size:11px;font-weight:500;color:#111827;'>{$itemName}</span>
+                    </div>
+                    <div style='display:flex;align-items:center;gap:8px;padding:0 12px;flex-shrink:0;'>
+                        <span style='
+                            background:#f1f5f9;border:1px solid #e2e8f0;
+                            border-radius:999px;padding:1px 10px;
+                            font-size:10px;color:#374151;
+                        '>{$size}</span>
+                        <span style='
+                            background:#eff6ff;border:1px solid #bfdbfe;
+                            border-radius:999px;padding:1px 10px;
+                            font-size:12px;font-weight:800;color:#1d4ed8;
+                            min-width:32px;text-align:center;
+                        '>{$qty}</span>
+                    </div>
+                </div>
+            ";
+        }
+
+        if (empty($itemRowsHtml)) {
+            $itemRowsHtml = "
+                <div style='padding:10px 12px;font-size:11px;color:#9ca3af;text-align:center;'>
+                    No issued items.
+                </div>
+            ";
+        }
+
+        $fields[] = \Filament\Forms\Components\Placeholder::make("tx_recipient_{$recipient->id}")
+            ->label('')
+            ->columnSpanFull()
+            ->content(new \Illuminate\Support\HtmlString("
+                <div style='
+                    border:1px solid #e2e8f0;
+                    border-radius:10px;
+                    overflow:hidden;
+                    margin-bottom:{$mb};
+                    box-shadow:0 1px 3px rgba(0,0,0,.04);
+                '>
+                    <!-- Employee header -->
+                    <div style='
+                        background:linear-gradient(to right,#f0f4ff,#f8fafc);
+                        border-bottom:1px solid #e2e8f0;
+                        padding:10px 14px;
+                        display:flex;align-items:center;justify-content:space-between;
+                    '>
+                        <div>
+                            <div style='font-size:13px;font-weight:700;color:#111827;'>👤 {$empName}</div>
+                            <div style='font-size:10px;color:#6b7280;margin-top:2px;'>
+                                📌 {$posName}
+                                &nbsp;·&nbsp;
+                                🔖 TXN: {$txnId}
+                            </div>
+                        </div>
+                        <span style='
+                            background:#ecfdf5;border:1px solid #a7f3d0;
+                            border-radius:999px;padding:3px 12px;
+                            font-size:11px;font-weight:700;color:#059669;
+                        '>{$empTotal} pc(s)</span>
+                    </div>
+
+                    <!-- Item column headers -->
+                    <div style='
+                        display:flex;justify-content:space-between;
+                        background:#1e3a5f;
+                        padding:5px 12px;
+                    '>
+                        <span style='font-size:9px;font-weight:700;color:#fff;text-transform:uppercase;letter-spacing:.05em;'>
+                            Item / Description
+                        </span>
+                        <div style='display:flex;gap:8px;'>
+                            <span style='font-size:9px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em;width:60px;text-align:center;'>
+                                Size
+                            </span>
+                            <span style='font-size:9px;font-weight:700;color:#93c5fd;text-transform:uppercase;letter-spacing:.05em;width:48px;text-align:center;'>
+                                Qty
+                            </span>
+                        </div>
+                    </div>
+
+                    <!-- Item rows -->
+                    <div>{$itemRowsHtml}</div>
+                </div>
+            "));
+    }
+
+    // ── Grand total footer bar ────────────────────────────────────────────────
+    $fields[] = \Filament\Forms\Components\Placeholder::make('tx_totals')
+        ->label('')
+        ->columnSpanFull()
+        ->content(new \Illuminate\Support\HtmlString("
+            <div style='
+                display:flex;align-items:center;justify-content:flex-end;gap:16px;
+                background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;
+                padding:10px 16px;margin-top:4px;
+            '>
+                <span style='font-size:11px;color:#9ca3af;margin-right:auto;'>Grand Total</span>
+                <div style='text-align:center;'>
+                    <div style='font-size:18px;font-weight:900;color:#1d4ed8;'>{$totalLines}</div>
+                    <div style='font-size:9px;color:#9ca3af;text-transform:uppercase;'>Lines</div>
+                </div>
+                <div style='width:1px;background:#e2e8f0;align-self:stretch;'></div>
+                <div style='text-align:center;'>
+                    <div style='font-size:18px;font-weight:900;color:#059669;'>{$totalPcs}</div>
+                    <div style='font-size:9px;color:#9ca3af;text-transform:uppercase;'>Pieces</div>
+                </div>
+            </div>
+        "));
+
+    return $fields;
+}
+
     // ─────────────────────────────────────────────────────────────────────────
     // Receiving Copy modal builder
     // ─────────────────────────────────────────────────────────────────────────
@@ -77,7 +372,6 @@ class UniformIssuancesTable
             ? \Carbon\Carbon::parse($record->issued_at)->format('F d, Y')
             : now()->format('F d, Y');
 
-        // Collect ALL logs that have snapshots (partial + issued), sorted oldest first
         $releaseLogs = $record->logs
             ->whereIn('action', ['partial', 'issued'])
             ->filter(fn ($log) => self::isJsonSnapshot($log->note))
@@ -88,7 +382,6 @@ class UniformIssuancesTable
         $recipientCount = $record->recipients->count();
         $allUrl         = url("/receiving-copy/issuance/{$record->id}");
 
-        // Count total slips
         if ($releaseCount > 0) {
             $totalSlips = 0;
             foreach ($releaseLogs as $log) {
@@ -106,7 +399,6 @@ class UniformIssuancesTable
 
         $fields = [];
 
-        // ── Status badge ──────────────────────────────────────────────────────
         $statusBadge = match ($record->status) {
             'partial'  => ['bg' => '#f59e0b', 'label' => 'PARTIAL — ' . $releaseCount . ' Release(s)'],
             'issued'   => ['bg' => '#059669', 'label' => 'ISSUED — ' . $releaseCount . ' Release(s)'],
@@ -114,7 +406,6 @@ class UniformIssuancesTable
             default    => ['bg' => '#6b7280', 'label' => strtoupper($record->status)],
         };
 
-        // ── Top bar ───────────────────────────────────────────────────────────
         $fields[] = Placeholder::make('rc_topbar')
             ->label('')
             ->columnSpanFull()
@@ -153,8 +444,6 @@ class UniformIssuancesTable
                 </div>
             "));
 
-        // ── If there are log snapshots — show each release as a card ──────────
-        // This applies to BOTH partial and issued statuses
         if ($releaseCount > 0) {
             foreach ($releaseLogs as $batchIdx => $log) {
                 $batchNo  = $batchIdx + 1;
@@ -164,7 +453,6 @@ class UniformIssuancesTable
                 $isLast   = $batchIdx === $releaseCount - 1;
                 $isFinal  = $isLast && $record->status === 'issued';
 
-                // Card accent color: amber for partial releases, green for the final issued release
                 $cardBorderColor = $isFinal ? '#059669' : '#f59e0b';
                 $cardBgFrom      = $isFinal ? '#ecfdf5' : '#fffbeb';
                 $cardBgTo        = $isFinal ? '#d1fae5' : '#fef3c7';
@@ -177,7 +465,6 @@ class UniformIssuancesTable
                 $btnHover        = $isFinal ? '#047857' : '#d97706';
                 $mb              = $isLast ? '0' : '12px';
 
-                // Group by employee
                 $byEmployee = [];
                 foreach ($snap as $row) {
                     $label    = $row['label'] ?? '';
@@ -252,8 +539,6 @@ class UniformIssuancesTable
             return $fields;
         }
 
-        // ── Fallback: issued/returned with no log snapshots ───────────────────
-        // Show per-recipient cards with individual print buttons
         $record->loadMissing('recipients.position', 'recipients.items.item');
 
         foreach ($record->recipients as $idx => $recipient) {
@@ -372,6 +657,13 @@ class UniformIssuancesTable
                         ? \Carbon\Carbon::parse($state)->format('M d, Y')
                         : '—'
                     ),
+
+                TextColumn::make('transmittal.transmittal_number')
+                    ->label('Transmittal #')
+                    ->placeholder('—')
+                    ->badge()
+                    ->color('info')
+                    ->copyable(),
 
                 TextColumn::make('note')
                     ->limit(50)
@@ -514,6 +806,12 @@ class UniformIssuancesTable
                                 ]);
                                 $record->forceLog    = false;
                                 $record->logSnapshot = null;
+                            }
+
+                            // ── Auto-create transmittal when fully issued ──────
+                            if ($allIssued) {
+                                $record->refresh();
+                                self::maybeCreateTransmittal($record);
                             }
 
                             Notification::make()
@@ -679,6 +977,20 @@ class UniformIssuancesTable
 
                 ]),
 
+                Action::make('view_transmittal_form')
+                    ->label('Transmittal Form')
+                    ->icon('heroicon-s-document-arrow-up')
+                    ->color('info')
+                    ->visible(fn ($record) =>
+                        $record->is_for_transmit &&
+                        in_array($record->status, ['partial', 'issued', 'returned'])
+                    )
+                    ->modalHeading('Transmittal Form')
+                    ->modalSubmitAction(false)
+                    ->modalCancelActionLabel('Close')
+                    ->modalWidth('3xl')
+                    ->form(fn ($record): array => self::buildTransmittalModal($record)),
+
                 // ── RECEIVING COPY (partial, issued, returned) ────────────────
                 Action::make('view_receiving_copy')
                     ->label('Receiving Copy')
@@ -812,7 +1124,7 @@ class UniformIssuancesTable
                         return $fields;
                     }),
 
-                // ── VIEW LOGS ─────────────────────────────────────────────────────────────────
+                // ── VIEW LOGS ─────────────────────────────────────────────────
                 Action::make('view_logs')
                     ->label('View Logs')
                     ->icon('heroicon-s-clock')
@@ -838,11 +1150,8 @@ class UniformIssuancesTable
                             'cancelled' => ['color' => '#dc2626', 'bg' => '#fef2f2', 'border' => '#fecaca', 'label' => 'Cancelled', 'icon' => 'M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z'],
                         ];
 
-
-                        // ── Summary bar at the top of the modal ──────────────────────────────
                         $fields = [];
 
-                        // ── Individual log entries ────────────────────────────────────────────
                         foreach ($logs as $i => $log) {
                             $c      = $config[$log->action] ?? $config['created'];
                             $date   = \Carbon\Carbon::parse($log->created_at)->timezone('Asia/Manila')->format('M d, Y');
@@ -860,7 +1169,6 @@ class UniformIssuancesTable
                                 $decoded = json_decode($rawNote, true);
                                 if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
 
-                                    // Per-log quantity summary chips
                                     $logQtyIssued   = 0;
                                     $logQtyReturned = 0;
                                     foreach ($decoded as $item) {
@@ -879,7 +1187,6 @@ class UniformIssuancesTable
                                         $logSummary = "<div style='display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;'>" . implode('', $logSummaryParts) . "</div>";
                                     }
 
-                                    // Row-by-row breakdown
                                     $rows = '';
                                     foreach ($decoded as $item) {
                                         $label = e($item['label'] ?? '');
@@ -905,7 +1212,6 @@ class UniformIssuancesTable
                                 }
                             }
 
-                            // Show "Cancelled" pill inline for cancelled logs with no items
                             if ($log->action === 'cancelled' && ! $rawNote) {
                                 $logSummary = "<div style='display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;'>
                                     <span style='background:#fef2f2;border:1px solid #fecaca;border-radius:999px;padding:2px 10px;font-size:11px;font-weight:700;color:#dc2626;'>🚫 Issuance cancelled</span>
@@ -984,6 +1290,11 @@ class UniformIssuancesTable
                                     }
                                 }
                                 $record->update(['status' => 'issued', 'issued_at' => now()]);
+
+                                // Auto-create transmittal if flagged
+                                $record->refresh();
+                                self::maybeCreateTransmittal($record);
+
                                 $issued++;
                             }
 
