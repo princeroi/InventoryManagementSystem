@@ -14,6 +14,7 @@ class UniformIssuance extends Model
         'site_id',
         'issuance_type_id',
         'status',
+        'note',
         'pending_at',
         'partial_at',
         'issued_at',
@@ -66,7 +67,41 @@ class UniformIssuance extends Model
         return $this->belongsTo(Transmittal::class);
     }
 
-    public function deductStock(): void
+    /**
+     * Append return entries to the note field.
+     * Note is stored as a JSON array of return events for tracking.
+     * Each entry: {employee, item, size, qty, by, at}
+     */
+    public function appendReturnNote(array $entries, string $performer): void
+    {
+        $existing = [];
+
+        if ($this->note) {
+            $decoded = json_decode($this->note, true);
+            if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                // Already JSON array format
+                $existing = $decoded;
+            } else {
+                // Legacy plain text note — preserve it as a text entry
+                $existing = [['text' => $this->note, 'at' => null]];
+            }
+        }
+
+        foreach ($entries as $entry) {
+            $existing[] = [
+                'employee' => $entry['employee'],
+                'item'     => $entry['item'],
+                'size'     => $entry['size'],
+                'qty'      => $entry['qty'],
+                'by'       => $performer,
+                'at'       => now()->timezone('Asia/Manila')->format('Y-m-d H:i'),
+            ];
+        }
+
+        $this->updateQuietly(['note' => json_encode($existing)]);
+    }
+
+public function deductStock(): void
     {
         $this->loadMissing('recipients.items');
 
@@ -136,23 +171,26 @@ class UniformIssuance extends Model
         });
 
         static::updated(function (self $issuance) {
-            if ($issuance->wasChanged('status')) {
-                $newStatus = $issuance->status;
-                $oldStatus = $issuance->getOriginal('status');
+            if (! $issuance->wasChanged('status')) return;
 
-                $wasStockConsumed = $oldStatus === 'issued';
-                $isStockConsumed  = $newStatus === 'issued';
+            $newStatus = $issuance->status;
+            $oldStatus = $issuance->getOriginal('status');
 
-                if ($isStockConsumed && ! $wasStockConsumed && $issuance->logSnapshot === null) {
-                    $issuance->deductStock();
-                }
+            // ── Stock deduction: pending/partial → issued ─────────────────────
+            // Only auto-deduct when transitioning INTO issued and we don't have
+            // a manual snapshot (meaning the action already handled stock).
+            $wasStockConsumed = in_array($oldStatus, ['issued']);
+            $isStockConsumed  = in_array($newStatus, ['issued']);
 
-                if (! $isStockConsumed && $wasStockConsumed && $issuance->logSnapshot === null) {
-                    $issuance->restoreStock();
-                }
+            if ($isStockConsumed && ! $wasStockConsumed && $issuance->logSnapshot === null) {
+                $issuance->deductStock();
             }
 
-            if (! $issuance->wasChanged('status')) return;
+            // NOTE: We no longer auto-restore stock when status changes to 'cancelled'
+            // or any other non-issued state. Stock restoration for returns is handled
+            // explicitly in the return action (UniformIssuancesTable) with fine-grained
+            // per-item quantities. For cancellations, stock was never deducted (pending
+            // issuances haven't had stock deducted yet).
 
             $note = null;
             if (! empty($issuance->logSnapshot)) {

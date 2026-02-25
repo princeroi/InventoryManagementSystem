@@ -15,6 +15,7 @@ class UniformIssuanceRecipient extends Model
         'position_id',
         'uniform_set_id',
         'mode',
+        'employee_status',
     ];
 
     // ── Auto-generate transaction_id on create ────────────────────────────

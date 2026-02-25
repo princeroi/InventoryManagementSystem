@@ -21,9 +21,14 @@ use Filament\Notifications\Notification;
 use Illuminate\Support\HtmlString;
 use Filament\Actions\Action;
 
-
 class UniformIssuanceForm
 {
+    // ── Employee status options (centralised) ─────────────────────────────────
+    public const EMPLOYEE_STATUS_OPTIONS = [
+        'posted'   => 'Posted',
+        'reliever' => 'Reliever',
+    ];
+
     private static function stockForVariant(?int $itemId, ?string $size): int
     {
         if (! $itemId || ! $size) return 0;
@@ -156,7 +161,8 @@ class UniformIssuanceForm
                     ->options(fn () => IssuanceType::where('department_id', Filament::getTenant()?->id)
                         ->pluck('name', 'id')
                         ->toArray())
-                    ->required(),
+                    ->required()
+                    ->helperText('e.g. New Hire · Salary Deduct · Annual · Additional'),
 
                 Select::make('status')
                     ->options([
@@ -210,7 +216,6 @@ class UniformIssuanceForm
                     ->collapsible()
                     ->collapsed(fn ($record) => ! ($record?->is_for_transmit))
                     ->schema([
-                        // Show existing transmittal number in edit mode
                         Placeholder::make('existing_transmittal_number')
                             ->label('Transmittal Number')
                             ->visible(fn ($record) => (bool) $record?->transmittal_id)
@@ -229,7 +234,6 @@ class UniformIssuanceForm
                             ->helperText('A transmittal record (HR-YYYYMMDD-XXXX) will be auto-created and linked to this issuance.')
                             ->live()
                             ->default(false)
-                            // Lock the toggle once a transmittal already exists
                             ->disabled(fn ($record) => (bool) $record?->transmittal_id)
                             ->columnSpanFull(),
 
@@ -248,7 +252,7 @@ class UniformIssuanceForm
                             ->required(fn ($get) => (bool) $get('is_for_transmit'))
                             ->maxLength(255)
                             ->visible(fn ($get) => $get('is_for_transmit'))
-                            ->helperText('Printed on the transmittal form under "Purpose". Leave blank to use the default.'),
+                            ->helperText('Printed on the transmittal form under "Purpose".'),
 
                         TextInput::make('transmittal_instructions')
                             ->label('Instructions')
@@ -257,9 +261,7 @@ class UniformIssuanceForm
                             ->required(fn ($get) => (bool) $get('is_for_transmit'))
                             ->maxLength(255)
                             ->visible(fn ($get) => $get('is_for_transmit'))
-                            ->helperText('Printed on the transmittal form under "Instructions". Leave blank to use the default.'),
-
-
+                            ->helperText('Printed on the transmittal form under "Instructions".'),
                     ])
                     ->columns(1),
 
@@ -272,7 +274,17 @@ class UniformIssuanceForm
                     ->defaultItems(1)
                     ->minItems(1)
                     ->live(debounce: 300)
-                    ->itemLabel(fn (array $state): ?string => $state['employee_name'] ?? 'New Employee')
+                    // ── Show name + status badge in collapsed label ────────────
+                    ->itemLabel(function (array $state): ?string {
+                        $name   = $state['employee_name'] ?? 'New Employee';
+                        $status = $state['employee_status'] ?? null;
+                        $badge  = match ($status) {
+                            'posted'   => ' 🟢 Posted',
+                            'reliever' => ' 🟡 Reliever',
+                            default    => '',
+                        };
+                        return $name . $badge;
+                    })
                     ->afterStateUpdated(function ($state, $set): void {
                         if (count($state) > 1) {
                             $lastIndex = count($state) - 1;
@@ -288,6 +300,21 @@ class UniformIssuanceForm
                             ->label('Employee Name')
                             ->required()
                             ->live(debounce: '500ms')
+                            ->columnSpan(1),
+
+                        // ── NEW: Employee Status ──────────────────────────────
+                        Select::make('employee_status')
+                            ->label('Employee Status')
+                            ->options(self::EMPLOYEE_STATUS_OPTIONS)
+                            ->default('posted')
+                            ->required()
+                            ->live()
+                            ->afterStateUpdated(function ($set): void {
+                                // Reset set & items when status changes —
+                                // the available sets will be different
+                                $set('uniform_set_id', null);
+                                $set('items', []);
+                            })
                             ->columnSpan(1),
 
                         Select::make('position_id')
@@ -306,14 +333,33 @@ class UniformIssuanceForm
                         Select::make('uniform_set_id')
                             ->label('Uniform Set')
                             ->options(function ($get) {
-                                $positionId = $get('position_id');
-                                $options    = ['manual' => '✏️ Manual Input'];
+                                $positionId     = $get('position_id');
+                                $employeeStatus = $get('employee_status');
+                                $options        = ['manual' => '✏️ Manual Input'];
 
                                 if ($positionId) {
-                                    $sets = UniformSet::where('department_id', Filament::getTenant()?->id)
-                                        ->where('position_id', $positionId)
-                                        ->pluck('name', 'id')
-                                        ->toArray();
+                                    $query = UniformSet::where('department_id', Filament::getTenant()?->id)
+                                        ->where('position_id', $positionId);
+
+                                    // Show sets with:
+                                    //   a) null employee_status  → applies to all
+                                    //   b) matching employee_status → specific to this type
+                                    if ($employeeStatus) {
+                                        $query->where(function ($q) use ($employeeStatus) {
+                                            $q->whereNull('employee_status')
+                                              ->orWhere('employee_status', $employeeStatus);
+                                        });
+                                    }
+
+                                    $sets = $query->get()->mapWithKeys(function ($set) {
+                                        $statusTag = match ($set->employee_status) {
+                                            'posted'   => ' 🟢',
+                                            'reliever' => ' 🟡',
+                                            default    => '',
+                                        };
+                                        return [$set->id => $set->name . $statusTag];
+                                    })->toArray();
+
                                     $options += $sets;
                                 }
 
@@ -452,14 +498,14 @@ class UniformIssuanceForm
                                         if ($isHard) {
                                             return new HtmlString("
                                                 <div style='font-size:11px;color:#dc2626;background:#fef2f2;border:1px solid #fecaca;border-radius:4px;padding:3px 8px;display:flex;align-items:center;gap:4px;flex-wrap:wrap;'>
-                                                    🚫 Only <strong>{$stock}</strong> in stock <strong>{$quantity}</strong> requested.
+                                                    🚫 Only <strong>{$stock}</strong> in stock — <strong>{$quantity}</strong> requested.
                                                 </div>
                                             ");
                                         }
 
                                         return new HtmlString("
                                             <div style='font-size:11px;color:#d97706;background:#fffbeb;border:1px solid #fde68a;border-radius:4px;padding:3px 8px;display:flex;align-items:center;gap:4px;flex-wrap:wrap;'>
-                                                ⚠️ Stock: <strong>{$stock}</strong> requested: <strong>{$quantity}</strong> Pending only.
+                                                ⚠️ Stock: <strong>{$stock}</strong> — requested: <strong>{$quantity}</strong> Pending only.
                                             </div>
                                         ");
                                     }),
@@ -495,7 +541,7 @@ class UniformIssuanceForm
                             ])
                             ->columns(12),
                     ])
-                    ->columns(3),
+                    ->columns(4), // 4-col grid: name | status | position | set
 
                 // ── Live subtotal panel ───────────────────────────────────────
                 Placeholder::make('items_subtotal')

@@ -14,6 +14,7 @@ class UniformSet extends Model
         'site_id',
         'name',
         'description',
+        'employee_status',
     ];
 
     public function department(): BelongsTo

@@ -34,6 +34,17 @@ class UniformSetForm
                     ->preload()
                     ->required(),
 
+                // ── NEW: employee status scope ──────────────────────────────
+                Select::make('employee_status')
+                    ->label('Applicable to Employee Status')
+                    ->options([
+                        'posted'   => 'Posted',
+                        'reliever' => 'Reliever',
+                    ])
+                    ->placeholder('All (no restriction)')
+                    ->nullable()
+                    ->helperText('Leave blank to make this set available for both Posted and Reliever employees.'),
+
                 Textarea::make('description')
                     ->nullable()
                     ->columnSpanFull(),
@@ -42,7 +53,7 @@ class UniformSetForm
                     ->label('Uniform Items')
                     ->relationship('items')
                     ->columnSpanFull()
-                    ->columns(2) // only 2 columns now since size is removed
+                    ->columns(2)
                     ->schema([
                         Select::make('item_id')
                             ->label('Item')

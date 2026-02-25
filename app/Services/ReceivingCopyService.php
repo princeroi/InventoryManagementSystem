@@ -373,7 +373,7 @@ class ReceivingCopyService
 
             <!-- SLIP FOOTER -->
             <div class='slip-foot'>
-                This document serves as official proof of uniform receipt. &nbsp;·&nbsp; Keep this copy for your records.
+                This document serves as the official Receiving Copy and shall be retained by the company for documentation purposes.
             </div>
         </div>";
     }

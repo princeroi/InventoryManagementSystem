@@ -37,33 +37,28 @@ class Transmittal extends Model
         return $this->hasMany(UniformIssuance::class);
     }
 
-    /**
-     * Generate next transmittal number: HR-YYYYMMDD-XXXX
-     * Sequence resets per calendar day per department.
-     */
+
     public static function generateNumber(int $departmentId): string
     {
+
         $prefix = 'HR-' . now()->format('Ymd') . '-';
 
         $last = DB::table('transmittals')
             ->where('department_id', $departmentId)
-            ->where('transmittal_number', 'like', $prefix . '%')
             ->orderByDesc('id')
             ->value('transmittal_number');
 
         $nextSeq = 1;
+
         if ($last) {
             $parts   = explode('-', $last);
-            $lastSeq = (int) end($parts);
-            $nextSeq = $lastSeq + 1;
+            $lastSeq = (int) end($parts); 
+            $nextSeq = $lastSeq + 1; 
         }
 
         return $prefix . str_pad($nextSeq, 4, '0', STR_PAD_LEFT);
     }
 
-    /**
-     * Aggregate items from a UniformIssuance into a summary array.
-     */
     public static function buildSummaryFromIssuance(UniformIssuance $issuance): array
     {
         $issuance->loadMissing('recipients.items.item');

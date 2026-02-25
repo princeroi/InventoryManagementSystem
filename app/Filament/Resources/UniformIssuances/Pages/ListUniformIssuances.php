@@ -107,6 +107,7 @@ class ListUniformIssuances extends ListRecords
                             'position_id'         => $employee['position_id'],
                             'uniform_set_id'      => ($employee['uniform_set_id'] !== 'manual') ? $employee['uniform_set_id'] : null,
                             'mode'                => ($employee['uniform_set_id'] === 'manual') ? 'manual' : 'auto',
+                            'employee_status'     => $employee['employee_status'] ?? 'posted',
                         ]);
 
                         foreach ($items as $item) {
