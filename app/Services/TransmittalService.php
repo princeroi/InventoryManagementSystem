@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\Transmittal;
 use App\Models\UniformIssuance;
+use App\Models\UniformIssuanceLog;
 
 class TransmittalService
 {
@@ -17,6 +18,9 @@ class TransmittalService
     // PUBLIC ENTRY POINTS
     // ─────────────────────────────────────────────────────────────────────────
 
+    /**
+     * Print transmittal from a Transmittal record.
+     */
     public static function generateFromTransmittal(Transmittal $transmittal): string
     {
         $transmittal->loadMissing(
@@ -26,9 +30,12 @@ class TransmittalService
             'issuances.recipients.items.item'
         );
         $data = self::buildDataFromTransmittal($transmittal);
-        return self::wrapDocument($data, "Transmittal #{$transmittal->transmittal_number}");
+        return self::wrapDocument([$data], "Transmittal #{$transmittal->transmittal_number}");
     }
 
+    /**
+     * Print transmittal from an issuance (uses its linked transmittal).
+     */
     public static function generateFromIssuance(UniformIssuance $issuance): string
     {
         $issuance->loadMissing(
@@ -39,7 +46,165 @@ class TransmittalService
         );
         $data  = self::buildDataFromIssuance($issuance);
         $txnNo = $issuance->transmittal?->transmittal_number ?? 'PREVIEW';
-        return self::wrapDocument($data, "Transmittal #{$txnNo}");
+        return self::wrapDocument([$data], "Transmittal #{$txnNo}");
+    }
+
+    /**
+     * Print ALL transmittals for an issuance:
+     *   Page 1   = original transmittal
+     *   Page 2+  = one page per item_changed log (changed items only)
+     *
+     * This is what "Print All" should call.
+     */
+    public static function generateAllFromIssuance(UniformIssuance $issuance): string
+    {
+        $issuance->loadMissing(
+            'site', 'issuanceType',
+            'recipients.position',
+            'recipients.items.item',
+            'transmittal', 'logs'
+        );
+
+        $txn   = $issuance->transmittal;
+        $txnNo = $txn?->transmittal_number ?? 'PREVIEW';
+        $pages = [];
+
+        // ── Page 1: original transmittal ─────────────────────────────────────
+        $pages[] = self::buildDataFromIssuance($issuance);
+
+        // ── Page 2+: one page per item_changed log ────────────────────────────
+        $changeLogs = $issuance->logs
+            ->where('action', 'item_changed')
+            ->filter(fn ($log) => ! empty($log->note) && self::isJsonSnapshot($log->note))
+            ->sortBy('created_at')
+            ->values();
+
+        foreach ($changeLogs as $log) {
+            $snapshot = json_decode($log->note, true);
+            if (! is_array($snapshot)) continue;
+
+            $logDate = \Carbon\Carbon::parse($log->created_at)->timezone('Asia/Manila')->format('F d, Y');
+            $rows    = [];
+
+            foreach ($snapshot as $row) {
+                $employeeName = trim($row['label'] ?? 'Unknown');
+                $toLabel      = $row['_to'] ?? null;
+                $newQty       = (int) ($row['released'] ?? 0);
+
+                if ($toLabel) {
+                    if (preg_match('/^(.+?)\s*\(([^)]+)\)\s*×\s*(\d+)$/', $toLabel, $m)) {
+                        $rows[] = [
+                            'employee'  => $employeeName,
+                            'item_name' => trim($m[1]),
+                            'size'      => trim($m[2]),
+                            'qty'       => (int) $m[3],
+                        ];
+                    } else {
+                        $rows[] = [
+                            'employee'  => $employeeName,
+                            'item_name' => $toLabel,
+                            'size'      => '',
+                            'qty'       => $newQty,
+                        ];
+                    }
+                }
+            }
+
+            if (empty($rows)) continue;
+
+            $pages[] = [
+                'transmittal_number' => $txnNo . '-AMD',
+                'transmitted_by'     => $txn?->transmitted_by ?? (auth()->user()?->name ?? '—'),
+                'transmitted_to'     => $txn?->transmitted_to ?? $issuance->transmitted_to ?? '—',
+                'issuance_type'      => $issuance->issuanceType?->name ?? '—',
+                'purpose'            => $txn?->purpose ?? '',
+                'instructions'       => $txn?->instructions ?? '',
+                'date'               => $logDate,
+                'rows'               => $rows,
+            ];
+        }
+
+        $totalPages = count($pages);
+        $title      = $totalPages > 1
+            ? "Transmittal #{$txnNo} + {$totalPages} page(s)"
+            : "Transmittal #{$txnNo}";
+
+        return self::wrapDocument($pages, $title);
+    }
+
+    /**
+     * Amendment transmittal from an item_changed log (single page).
+     * $changedItemsOnly = true  → only changed item rows
+     * $changedItemsOnly = false → full current transmittal rows
+     */
+    public static function generateAmendmentFromLog(
+        UniformIssuanceLog $log,
+        bool $changedItemsOnly = false
+    ): string {
+        $issuance = $log->uniformIssuance;
+        $issuance->loadMissing(
+            'site', 'issuanceType',
+            'recipients.position',
+            'recipients.items.item',
+            'transmittal', 'logs'
+        );
+
+        $snapshot = json_decode($log->note, true);
+        if (! is_array($snapshot)) {
+            $data = self::buildDataFromIssuance($issuance);
+            return self::wrapDocument([$data], 'Transmittal Amendment');
+        }
+
+        $txn     = $issuance->transmittal;
+        $txnNo   = $txn?->transmittal_number ?? 'PREVIEW';
+        $logDate = \Carbon\Carbon::parse($log->created_at)->timezone('Asia/Manila')->format('F d, Y');
+
+        if ($changedItemsOnly) {
+            $rows = [];
+            foreach ($snapshot as $row) {
+                $employeeName = trim($row['label'] ?? 'Unknown');
+                $toLabel      = $row['_to'] ?? null;
+                $newQty       = (int) ($row['released'] ?? 0);
+
+                if ($toLabel) {
+                    if (preg_match('/^(.+?)\s*\(([^)]+)\)\s*×\s*(\d+)$/', $toLabel, $m)) {
+                        $rows[] = [
+                            'employee'  => $employeeName,
+                            'item_name' => trim($m[1]),
+                            'size'      => trim($m[2]),
+                            'qty'       => (int) $m[3],
+                        ];
+                    } else {
+                        $rows[] = [
+                            'employee'  => $employeeName,
+                            'item_name' => $toLabel,
+                            'size'      => '',
+                            'qty'       => $newQty,
+                        ];
+                    }
+                }
+            }
+
+            $data = [
+                'transmittal_number' => $txnNo . '-AMD',
+                'transmitted_by'     => $txn?->transmitted_by ?? (auth()->user()?->name ?? '—'),
+                'transmitted_to'     => $txn?->transmitted_to ?? $issuance->transmitted_to ?? '—',
+                'issuance_type'      => $issuance->issuanceType?->name ?? '—',
+                'purpose'            => $txn?->purpose ?? '',
+                'instructions'       => $txn?->instructions ?? '',
+                'date'               => $logDate,
+                'rows'               => $rows,
+            ];
+
+            return self::wrapDocument([$data], "Transmittal #{$txnNo}-AMD");
+        }
+
+        // Full current transmittal rows
+        $data                       = self::buildDataFromIssuance($issuance);
+        $data['transmittal_number'] = $txnNo . '-AMD';
+        $data['date']               = $logDate;
+
+        return self::wrapDocument([$data], "Transmittal #{$txnNo}-AMD");
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -48,13 +213,14 @@ class TransmittalService
 
     private static function buildDataFromTransmittal(Transmittal $transmittal): array
     {
-        $rows = [];
+        $rows         = [];
         $issuanceType = null;
+
         foreach ($transmittal->issuances as $issuance) {
-            if (!$issuanceType) $issuanceType = $issuance->issuanceType?->name;
+            if (! $issuanceType) $issuanceType = $issuance->issuanceType?->name;
             foreach ($issuance->recipients as $recipient) {
                 foreach ($recipient->items as $item) {
-                    $qty = (int)($item->released_quantity ?: $item->quantity);
+                    $qty = (int) ($item->released_quantity ?: $item->quantity);
                     if ($qty <= 0) continue;
                     $rows[] = [
                         'employee'  => $recipient->employee_name ?? '—',
@@ -65,6 +231,7 @@ class TransmittalService
                 }
             }
         }
+
         return [
             'transmittal_number' => $transmittal->transmittal_number,
             'transmitted_by'     => $transmittal->transmitted_by ?? '—',
@@ -75,7 +242,7 @@ class TransmittalService
             'date'               => $transmittal->created_at
                 ? \Carbon\Carbon::parse($transmittal->created_at)->timezone('Asia/Manila')->format('F d, Y')
                 : now()->format('F d, Y'),
-            'rows' => $rows,
+            'rows'               => $rows,
         ];
     }
 
@@ -84,7 +251,7 @@ class TransmittalService
         $rows = [];
         foreach ($issuance->recipients as $recipient) {
             foreach ($recipient->items as $item) {
-                $qty = (int)($item->released_quantity ?: $item->quantity);
+                $qty = (int) ($item->released_quantity ?: $item->quantity);
                 if ($qty <= 0) continue;
                 $rows[] = [
                     'employee'  => $recipient->employee_name ?? '—',
@@ -94,7 +261,9 @@ class TransmittalService
                 ];
             }
         }
+
         $txn = $issuance->transmittal;
+
         return [
             'transmittal_number' => $txn?->transmittal_number ?? 'PREVIEW',
             'transmitted_by'     => $txn?->transmitted_by ?? (auth()->user()?->name ?? '—'),
@@ -105,12 +274,19 @@ class TransmittalService
             'date'               => $txn?->created_at
                 ? \Carbon\Carbon::parse($txn->created_at)->timezone('Asia/Manila')->format('F d, Y')
                 : now()->format('F d, Y'),
-            'rows' => $rows,
+            'rows'               => $rows,
         ];
     }
 
+    private static function isJsonSnapshot(string $note): bool
+    {
+        if (! str_starts_with(trim($note), '[')) return false;
+        $decoded = json_decode($note, true);
+        return json_last_error() === JSON_ERROR_NONE && is_array($decoded);
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
-    // RENDERER
+    // RENDERER — one format only, always blue #1a237e
     // ─────────────────────────────────────────────────────────────────────────
 
     private static function renderPage(array $d): string
@@ -130,19 +306,17 @@ class TransmittalService
         $addr    = e(self::COMPANY_ADDRESS);
         $phone   = e(self::COMPANY_PHONE);
 
-        // ── Item rows ─────────────────────────────────────────────────────────
-        $itemRows   = '';
-        $grandTotal = 0;
-        $MIN_ROWS   = 12;
+        $itemRows = '';
+        $MIN_ROWS = 12;
 
         foreach ($rows as $i => $row) {
             $no       = $i + 1;
             $employee = e($row['employee']);
             $itemName = e($row['item_name']);
             $size     = $row['size'] ? ' (' . e($row['size']) . ')' : '';
-            $qty      = (int)$row['qty'];
-            $grandTotal += $qty;
-            $desc = "{$employee} - {$itemName}{$size}";
+            $qty      = (int) $row['qty'];
+            $desc     = "{$employee} - {$itemName}{$size}";
+
             $itemRows .= "
                 <tr class='data-row'>
                     <td class='c-no'>{$no}</td>
@@ -151,7 +325,6 @@ class TransmittalService
                 </tr>";
         }
 
-        // Filler rows to fill the table body
         for ($f = count($rows); $f < $MIN_ROWS; $f++) {
             $itemRows .= "
                 <tr class='data-row filler'>
@@ -166,7 +339,6 @@ class TransmittalService
 
     <!-- ════ COMPANY HEADER ════ -->
     <div class="co-header">
-        <!-- Logo -->
         <div class="co-logo">
             <div class="logo-top">STRONG<span>LINK</span></div>
             <div class="logo-bottom">— SERVICES —</div>
@@ -213,7 +385,6 @@ class TransmittalService
                 <th class="c-qty">QTY</th>
                 <th class="c-desc">ITEM DESCRIPTION</th>
             </tr>
-
         </thead>
         <tbody>
             {$itemRows}
@@ -258,16 +429,27 @@ HTML;
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // HTML DOCUMENT WRAPPER
+    // HTML DOCUMENT WRAPPER — supports multiple A4 pages
     // ─────────────────────────────────────────────────────────────────────────
 
-    private static function wrapDocument(array $data, string $title): string
+    private static function wrapDocument(array $pages, string $title): string
     {
-        $page       = self::renderPage($data);
         $safeTitle  = e($title);
         $genTime    = now()->timezone('Asia/Manila')->format('M d, Y h:i A');
-        $totalItems = count($data['rows']);
-        $grandTotal = array_sum(array_column($data['rows'], 'qty'));
+        $totalPages = count($pages);
+
+        $pagesHtml = '';
+        foreach ($pages as $idx => $data) {
+            $pb        = ($idx < $totalPages - 1) ? 'page-break-after:always;' : '';
+            $pagesHtml .= "<div class='a4' style='{$pb}'>" . self::renderPage($data) . "</div>";
+        }
+
+        $totalItems = array_sum(array_map(fn ($d) => count($d['rows']), $pages));
+        $grandTotal = array_sum(array_map(
+            fn ($d) => array_sum(array_column($d['rows'], 'qty')),
+            $pages
+        ));
+        $pageBadge = $totalPages > 1 ? " &nbsp;·&nbsp; {$totalPages} pages" : '';
 
         return <<<HTML
 <!DOCTYPE html>
@@ -277,11 +459,9 @@ HTML;
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{$safeTitle}</title>
 <style>
-/* ── Reset ── */
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
 body{font-family:Arial,sans-serif;background:#d1d9e6;color:#000;}
 
-/* ── Screen toolbar ── */
 .toolbar{
     position:fixed;top:0;left:0;right:0;z-index:9999;
     font-family:'Segoe UI',Arial,sans-serif;
@@ -299,247 +479,55 @@ body{font-family:Arial,sans-serif;background:#d1d9e6;color:#000;}
 .btn-blue{background:#2563eb;color:#fff;}
 .btn-ghost{background:rgba(255,255,255,.1);color:#e2e8f0;border:1px solid rgba(255,255,255,.2);}
 
-/* ── A4 wrapper ── */
-.pages{padding:72px 32px 48px;display:flex;flex-direction:column;align-items:center;}
+.pages{padding:72px 32px 48px;display:flex;flex-direction:column;align-items:center;gap:28px;}
 .a4{
-    width:210mm;
-    height:297mm;
-    background:#fff;
-    box-shadow:0 8px 32px rgba(0,0,0,.22);
-    border-radius:2px;
-    overflow:hidden;
-    display:flex;
-    flex-direction:column;
+    width:210mm;height:297mm;
+    background:#fff;box-shadow:0 8px 32px rgba(0,0,0,.22);
+    border-radius:2px;overflow:hidden;display:flex;flex-direction:column;
 }
 
-/* ── PAGE — fills the A4 ── */
 .page{
-    width:100%;
-    height:100%;
-    display:flex;
-    flex-direction:column;
+    width:100%;height:100%;display:flex;flex-direction:column;
     padding:6mm 8mm 5mm;
-    border:1.5px dashed #b0bec5; /* dashed border like the sample */
-    box-sizing:border-box;
+    border:1.5px dashed #b0bec5;box-sizing:border-box;
 }
 
-/* ════ COMPANY HEADER ════ */
-.co-header{
-    text-align:center;
-    flex-shrink:0;
-    padding-bottom:2mm;
-    border-bottom:1px solid #ccc;
-}
-.co-logo{
-    display:inline-flex;
-    flex-direction:column;
-    align-items:center;
-    margin-bottom:1mm;
-}
-.logo-top{
-    font-size:20pt;
-    font-weight:900;
-    letter-spacing:.08em;
-    color:#1a237e;
-    line-height:1;
-    font-family:Arial,sans-serif;
-}
+.co-header{text-align:center;flex-shrink:0;padding-bottom:2mm;border-bottom:1px solid #ccc;}
+.co-logo{display:inline-flex;flex-direction:column;align-items:center;margin-bottom:1mm;}
+.logo-top{font-size:20pt;font-weight:900;letter-spacing:.08em;color:#1a237e;line-height:1;font-family:Arial,sans-serif;}
 .logo-top span{color:#1565c0;}
-.logo-bottom{
-    font-size:8pt;
-    color:#555;
-    letter-spacing:.2em;
-    margin-top:0;
-}
-.co-tagline{
-    font-size:9.5pt;
-    color:#333;
-    margin-top:1mm;
-}
+.logo-bottom{font-size:8pt;color:#555;letter-spacing:.2em;margin-top:0;}
+.co-tagline{font-size:9.5pt;color:#333;margin-top:1mm;}
 
-/* ════ DEPT TITLE + No. ════ */
-.dept-row{
-    width:100%;
-    border-collapse:collapse;
-    border:1.5px solid #000;
-    border-top:none;
-    flex-shrink:0;
-}
-.dept-row td{
-    padding:2.5mm 3mm;
-    border:1px solid #000;
-    vertical-align:middle;
-    background:#1a237e;
-    color:#fff;
-    -webkit-print-color-adjust:exact;
-    print-color-adjust:exact;
-}
-.dept-name{
-    font-size:14pt;
-    font-weight:700;
-    text-transform:uppercase;
-    letter-spacing:.06em;
-    text-align:center;
-    border-right:2px solid #fff;
-    color:#fff;
-}
-.no-label{
-    font-size:9.5pt;
-    font-weight:700;
-    width:18mm;
-    text-align:center;
-    border-right:1px solid #fff;
-    white-space:nowrap;
-    color:#fff;
-}
-.no-value{
-    font-size:12pt;
-    font-weight:900;
-    color:#93c5fd;
-    width:30mm;
-    text-align:center;
-    white-space:nowrap;
-}
+.dept-row{width:100%;border-collapse:collapse;border:1.5px solid #000;border-top:none;flex-shrink:0;}
+.dept-row td{padding:2.5mm 3mm;border:1px solid #000;vertical-align:middle;background:#1a237e;color:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+.dept-name{font-size:14pt;font-weight:700;text-transform:uppercase;letter-spacing:.06em;text-align:center;border-right:2px solid #fff;color:#fff;}
+.no-label{font-size:9.5pt;font-weight:700;width:18mm;text-align:center;border-right:1px solid #fff;white-space:nowrap;color:#fff;}
+.no-value{font-size:12pt;font-weight:900;color:#93c5fd;width:30mm;text-align:center;white-space:nowrap;}
 
-/* ════ META TABLE ════ */
-.meta-table{
-    width:100%;
-    border-collapse:separate;
-    border-spacing:0;
-    border:1px solid #ccc;
-    border-top:none;
-    flex-shrink:0;
-}
-.meta-table td{
-    padding:1.8mm 3mm;
-    border-bottom:1px solid #ccc;
-    border-right:1px solid #ccc;
-    font-size:10pt;
-    vertical-align:middle;
-}
-.meta-table td:first-child{
-    border-left:none;
-}
-.meta-table tr:last-child td{
-    border-bottom:none;
-}
-.meta-key{
-    font-weight:700;
-    width:18mm;
-    text-align:right;
-    white-space:nowrap;
-    border-right:1px solid #ccc;
-    color:#333;
-}
-.meta-val{
-    text-align:center;
-}
-.meta-val-to{
-    font-weight:700;
-    font-size:11pt;
-}
-.meta-spacer td{
-    padding:2mm 0;
-    border:none !important;
-    background:#fff;
-}
-.meta-table tr.meta-spacer td{
-    border:none !important;
-    outline:none !important;
-    box-shadow:none !important;
-}
-.meta-issuance-type{
-    text-align:center;
-    font-size:11pt;
-    font-weight:700;
-    text-transform:uppercase;
-    letter-spacing:.04em;
-    padding:2.5mm 3mm;
-    border-top:1px solid #ccc;
-    border-right:none;
-    color:#1a237e;
-}
+.meta-table{width:100%;border-collapse:separate;border-spacing:0;border:1px solid #ccc;border-top:none;flex-shrink:0;}
+.meta-table td{padding:1.8mm 3mm;border-bottom:1px solid #ccc;border-right:1px solid #ccc;font-size:10pt;vertical-align:middle;}
+.meta-table td:first-child{border-left:none;}
+.meta-table tr:last-child td{border-bottom:none;}
+.meta-key{font-weight:700;width:18mm;text-align:right;white-space:nowrap;border-right:1px solid #ccc;color:#333;}
+.meta-val{text-align:center;}
+.meta-val-to{font-weight:700;font-size:11pt;}
+.meta-spacer td{padding:2mm 0;border:none !important;background:#fff;}
+.meta-table tr.meta-spacer td{border:none !important;}
+.meta-issuance-type{text-align:center;font-size:11pt;font-weight:700;text-transform:uppercase;letter-spacing:.04em;padding:2.5mm 3mm;border-top:1px solid #ccc;border-right:none;color:#1a237e;}
 
-/* ════ ITEMS TABLE ════ */
-.items-table{
-    width:100%;
-    border-collapse:collapse;
-    border:1.5px solid #000;
-    border-top:none;
-    flex:1;                   /* fills all remaining vertical space */
-    table-layout:fixed;
-}
-/* Column widths */
-.c-no  { width:16mm; }
-.c-qty { width:22mm; }
-.c-desc{ }                    /* takes remaining width */
-
-/* Column headers */
-.col-header th{
-    padding:2mm 2mm;
-    font-size:8pt;
-    font-weight:700;
-    text-transform:uppercase;
-    text-align:center;
-    background:#1a237e;
-    color:#fff;
-    border:1px solid #000;
-    letter-spacing:.04em;
-    -webkit-print-color-adjust:exact;
-    print-color-adjust:exact;
-}
-
-/* Subject row (issuance type) */
-.subject-row td{
-    padding:1.5mm 2mm;
-}
-.subject-row td.c-no,
-.subject-row td.c-qty{
-    border:none !important;
-    background:#fff;
-}
-.c-subject{
-    font-size:9.5pt;
-    font-weight:700;
-    text-align:center;
-    text-transform:uppercase;
-    letter-spacing:.03em;
-    border:1px solid #ccc !important;
-}
-
-/* Data + filler rows */
-.data-row td{
-    border-bottom:1px solid #e0e0e0;
-    border-right:1px solid #ccc;
-    vertical-align:middle;
-    height:9mm;                /* even row height like the sample */
-}
+.items-table{width:100%;border-collapse:collapse;border:1.5px solid #000;border-top:none;flex:1;table-layout:fixed;}
+.c-no{width:16mm;}.c-qty{width:22mm;}
+.col-header th{padding:2mm 2mm;font-size:8pt;font-weight:700;text-transform:uppercase;text-align:center;background:#1a237e;color:#fff;border:1px solid #000;letter-spacing:.04em;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+.data-row td{border-bottom:1px solid #e0e0e0;border-right:1px solid #ccc;vertical-align:middle;height:9mm;}
 .data-row td:last-child{border-right:none;}
-.c-no {text-align:center; font-size:9.5pt; border-right:1px solid #000 !important;}
-.c-qty{text-align:center; font-size:9.5pt; font-weight:600; border-right:1px solid #000 !important; white-space:nowrap;}
-.c-desc{text-align:center; font-size:9.5pt; padding:1.5mm 3mm;}
+.c-no{text-align:center;font-size:9.5pt;border-right:1px solid #000 !important;}
+.c-qty{text-align:center;font-size:9.5pt;font-weight:600;border-right:1px solid #000 !important;white-space:nowrap;}
+.c-desc{text-align:center;font-size:9.5pt;padding:1.5mm 3mm;}
 
-/* ════ BOTTOM SECTION ════ */
-.bottom-table{
-    width:100%;
-    border-collapse:collapse;
-    border:1.5px solid #000;
-    border-top:1.5px solid #000;
-    flex-shrink:0;
-}
-.bottom-table td{
-    border:1px solid #ccc;
-    vertical-align:middle;
-    padding:1.8mm 3mm;
-    font-size:9.5pt;
-}
-.b-label{
-    width:42mm;
-    font-weight:700;
-    font-size:9pt;
-    border-right:1.5px solid #000;
-    white-space:nowrap;
-}
+.bottom-table{width:100%;border-collapse:collapse;border:1.5px solid #000;border-top:1.5px solid #000;flex-shrink:0;}
+.bottom-table td{border:1px solid #ccc;vertical-align:middle;padding:1.8mm 3mm;font-size:9.5pt;}
+.b-label{width:42mm;font-weight:700;font-size:9pt;border-right:1.5px solid #000;white-space:nowrap;}
 .b-hint{font-weight:400;font-style:italic;font-size:8pt;}
 .b-value{text-align:center;}
 .b-bold{font-weight:700;text-transform:uppercase;letter-spacing:.04em;font-size:9.5pt;}
@@ -550,42 +538,28 @@ body{font-family:Arial,sans-serif;background:#d1d9e6;color:#000;}
 .sig-line-label{font-size:7.5pt;color:#555;margin-top:1mm;text-align:center;}
 .date-line{width:55%;margin:2mm auto;border-bottom:1.5px solid #000;height:8mm;}
 
-/* ════ ADDRESS FOOTER ════ */
-.addr-footer{
-    flex-shrink:0;
-    text-align:center;
-    font-size:7.5pt;
-    color:#555;
-    padding-top:2mm;
-    border-top:1px solid #ccc;
-    margin-top:auto;
-    line-height:1.6;
-}
+.addr-footer{flex-shrink:0;text-align:center;font-size:7.5pt;color:#555;padding-top:2mm;border-top:1px solid #ccc;margin-top:auto;line-height:1.6;}
 
-/* ════ PRINT ════ */
 @media print{
     @page{size:A4 portrait;margin:0;}
-    html,body{width:210mm;height:297mm;background:#fff !important;overflow:hidden;}
+    html,body{width:210mm;background:#fff !important;}
     .toolbar{display:none !important;}
-    .pages{padding:0;background:#fff;}
-    .a4{width:210mm;height:297mm;box-shadow:none;border-radius:0;page-break-after:avoid;page-break-inside:avoid;}
+    .pages{padding:0;gap:0;background:#fff;}
+    .a4{width:210mm;height:297mm;box-shadow:none;border-radius:0;}
     .page{border-color:#b0bec5;}
-    .col-header th,.dept-row,.meta-table,.items-table,.bottom-table{
-        -webkit-print-color-adjust:exact;print-color-adjust:exact;
-    }
+    .col-header th,.dept-row,.meta-table,.items-table,.bottom-table{-webkit-print-color-adjust:exact;print-color-adjust:exact;}
 }
 </style>
 </head>
 <body>
 
-<!-- Screen toolbar -->
 <div class="toolbar">
     <div class="tbar-l">
         <div>
             <div class="tbar-title">📮 {$safeTitle}</div>
             <div class="tbar-sub">Generated {$genTime}</div>
         </div>
-        <div class="tbar-badge">{$totalItems} line(s) &nbsp;·&nbsp; {$grandTotal} total pcs</div>
+        <div class="tbar-badge">{$totalItems} line(s) &nbsp;·&nbsp; {$grandTotal} total pcs{$pageBadge}</div>
     </div>
     <div class="tbar-r">
         <button class="btn btn-blue" onclick="window.print()">
@@ -594,17 +568,14 @@ body{font-family:Arial,sans-serif;background:#d1d9e6;color:#000;}
                 <path d="M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/>
                 <rect x="6" y="14" width="12" height="8"/>
             </svg>
-            Print
+            Print All ({$totalPages} page(s))
         </button>
         <button class="btn btn-ghost" onclick="window.close()">✕ Close</button>
     </div>
 </div>
 
-<!-- A4 page -->
 <div class="pages">
-    <div class="a4">
-        {$page}
-    </div>
+    {$pagesHtml}
 </div>
 
 </body>

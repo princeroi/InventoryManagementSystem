@@ -15,7 +15,7 @@ use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Filament\Facades\Filament;
-use Illuminate\Support\Facades\Auth; // ← ADD THIS
+use Illuminate\Support\Facades\Auth; 
 
 class UniformIssuanceResource extends Resource
 {

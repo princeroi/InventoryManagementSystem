@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use App\Models\UniformIssuanceLog;
+use App\Models\UniformIssuanceBilling;
 
 class UniformIssuance extends Model
 {
@@ -65,6 +66,11 @@ class UniformIssuance extends Model
     public function transmittal(): BelongsTo
     {
         return $this->belongsTo(Transmittal::class);
+    }
+
+    public function billings(): HasMany
+    {
+        return $this->hasMany(UniformIssuanceBilling::class);
     }
 
     /**

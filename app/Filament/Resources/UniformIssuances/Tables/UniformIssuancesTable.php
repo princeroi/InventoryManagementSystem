@@ -66,6 +66,30 @@ class UniformIssuancesTable
     }
 
     /**
+     * Renders a single step in the billing progress timeline.
+     */
+    private static function billingTimelineStep(string $label, string $sub, string $color, bool $done): string
+    {
+        $dot = $done
+            ? "<div style='width:18px;height:18px;background:{$color};border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0;'>
+                   <svg width='10' height='10' fill='none' stroke='#fff' stroke-width='3' viewBox='0 0 24 24'><polyline points='20 6 9 17 4 12'/></svg>
+               </div>"
+            : "<div style='width:18px;height:18px;background:#f3f4f6;border-radius:50%;flex-shrink:0;border:2px solid #e5e7eb;'></div>";
+
+        $labelColor = $done ? '#111827' : '#9ca3af';
+
+        return "
+            <div style='display:flex;align-items:flex-start;gap:10px;'>
+                {$dot}
+                <div style='flex:1;padding-bottom:2px;'>
+                    <div style='font-size:12px;font-weight:700;color:{$labelColor};'>{$label}</div>
+                    <div style='font-size:11px;color:#6b7280;margin-top:1px;'>{$sub}</div>
+                </div>
+            </div>
+        ";
+    }
+
+    /**
      * If the issuance is flagged for transmittal, has no transmittal yet,
      * and is now fully issued — create & link the transmittal record.
      */
@@ -102,266 +126,6 @@ class UniformIssuancesTable
             ->send();
     }
 
-    private static function buildTransmittalModal($record): array
-    {
-        $record->loadMissing(
-            'site',
-            'issuanceType',
-            'transmittal',
-            'recipients.position',
-            'recipients.items.item'
-        );
-
-        // ── Header data ───────────────────────────────────────────────────────────
-        $txn      = $record->transmittal;
-        $txnNo    = $txn?->transmittal_number ?? null;
-        $txnTo    = e($record->transmitted_to ?? $txn?->transmitted_to ?? '—');
-        $txnBy    = e($txn?->transmitted_by ?? auth()->user()?->name ?? '—');
-        $txnDate  = $txn?->created_at
-            ? \Carbon\Carbon::parse($txn->created_at)->timezone('Asia/Manila')->format('F d, Y')
-            : now()->format('F d, Y');
-
-        $siteName         = e($record->site?->name ?? '—');
-        $issuanceTypeName = e($record->issuanceType?->name ?? '—');
-
-        $printUrl = url("/transmittal-copy/issuance/{$record->id}");
-
-        // ── Status badge ──────────────────────────────────────────────────────────
-        $statusBadge = match ($record->status) {
-            'partial'  => ['bg' => '#f59e0b', 'label' => 'PARTIAL'],
-            'issued'   => ['bg' => '#059669', 'label' => 'ISSUED'],
-            'returned' => ['bg' => '#dc2626', 'label' => 'RETURNED'],
-            default    => ['bg' => '#6b7280', 'label' => strtoupper($record->status)],
-        };
-
-        // ── Transmittal number badge ──────────────────────────────────────────────
-        $txnBadgeHtml = $txnNo
-            ? "<span style='background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.3);color:#fff;font-size:11px;font-weight:800;padding:2px 12px;border-radius:999px;letter-spacing:.05em;'>
-                   📋 {$txnNo}
-               </span>"
-            : "<span style='background:rgba(255,255,255,.1);color:#fde68a;font-size:10px;font-weight:700;padding:2px 10px;border-radius:999px;'>
-                   ⚠ No transmittal number yet
-               </span>";
-
-        // ── Grand totals for the topbar subtitle ─────────────────────────────────
-        $totalLines = 0;
-        $totalPcs   = 0;
-        foreach ($record->recipients as $recipient) {
-            foreach ($recipient->items as $item) {
-                $qty = (int) ($item->released_quantity ?: $item->quantity);
-                if ($qty <= 0) continue;
-                $totalLines++;
-                $totalPcs += $qty;
-            }
-        }
-
-        $fields = [];
-
-        // ── TOPBAR placeholder (mirrors rc_topbar) ────────────────────────────────
-        $fields[] = \Filament\Forms\Components\Placeholder::make('tx_topbar')
-            ->label('')
-            ->columnSpanFull()
-            ->content(new \Illuminate\Support\HtmlString("
-                <div style='
-                    display:flex;align-items:center;justify-content:space-between;
-                    padding:12px 16px;
-                    background:linear-gradient(to right,#1e3a5f,#1d4ed8);
-                    border-radius:10px;
-                    margin-bottom:16px;
-                '>
-                    <div>
-                        <div style='display:flex;align-items:center;gap:8px;margin-bottom:4px;'>
-                            <div style='font-size:14px;font-weight:800;color:#fff;'>📮 Transmittal Form</div>
-                            <span style='background:{$statusBadge['bg']};color:#fff;font-size:9px;font-weight:800;padding:2px 10px;border-radius:999px;letter-spacing:.06em;'>
-                                {$statusBadge['label']}
-                            </span>
-                            {$txnBadgeHtml}
-                        </div>
-                        <div style='font-size:11px;color:#93c5fd;margin-top:2px;'>
-                            {$siteName} &nbsp;·&nbsp; {$issuanceTypeName} &nbsp;·&nbsp; {$txnDate}
-                            &nbsp;·&nbsp; To: <strong style='color:#fff;'>{$txnTo}</strong>
-                            &nbsp;·&nbsp; By: <strong style='color:#fff;'>{$txnBy}</strong>
-                            &nbsp;·&nbsp; <strong style='color:#fff;'>{$totalLines}</strong> line(s)
-                            &nbsp;·&nbsp; <strong style='color:#fff;'>{$totalPcs}</strong> pc(s)
-                        </div>
-                    </div>
-                    <a
-                        href='{$printUrl}'
-                        target='_blank'
-                        style='display:inline-flex;align-items:center;gap:7px;padding:9px 18px;background:#fff;color:#1e3a5f;border-radius:8px;font-size:12px;font-weight:800;text-decoration:none;flex-shrink:0;'
-                        onmouseover=\"this.style.opacity='.88'\"
-                        onmouseout=\"this.style.opacity='1'\"
-                    >
-                        <svg width='14' height='14' fill='none' stroke='currentColor' stroke-width='2' viewBox='0 0 24 24'>
-                            <polyline points='6 9 6 2 18 2 18 9'/>
-                            <path d='M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2'/>
-                            <rect x='6' y='14' width='12' height='8'/>
-                        </svg>
-                        Print Transmittal
-                    </a>
-                </div>
-            "));
-
-        // ── Per-employee cards ────────────────────────────────────────────────────
-        $recipients   = $record->recipients;
-        $recipientCnt = $recipients->count();
-
-        if ($recipientCnt === 0) {
-            $fields[] = \Filament\Forms\Components\Placeholder::make('tx_empty')
-                ->label('')
-                ->columnSpanFull()
-                ->content(new \Illuminate\Support\HtmlString("
-                    <div style='text-align:center;padding:32px 0;color:#9ca3af;font-size:13px;'>
-                        No recipients found for this issuance.
-                    </div>
-                "));
-            return $fields;
-        }
-
-        foreach ($recipients as $idx => $recipient) {
-            $empName  = e($recipient->employee_name ?? 'Unknown Employee');
-            $posName  = e($recipient->position?->name ?? '—');
-            $txnId    = e($recipient->transaction_id ?? '—');
-            $isLast   = $idx === $recipientCnt - 1;
-            $mb       = $isLast ? '0' : '12px';
-
-            // Build item rows for this employee
-            $empTotal     = 0;
-            $itemRowsHtml = '';
-
-            foreach ($recipient->items as $ii => $item) {
-                $qty = (int) ($item->released_quantity ?: $item->quantity);
-                if ($qty <= 0) continue;
-
-                $empTotal  += $qty;
-                $itemName   = e($item->item?->name ?? "Item #{$item->item_id}");
-                $size       = e($item->size ?? '—');
-                $rowBg      = $ii % 2 === 0 ? '#ffffff' : '#f8fafc';
-
-                $itemRowsHtml .= "
-                    <div style='
-                        display:flex;justify-content:space-between;align-items:center;
-                        padding:5px 0;
-                        border-bottom:1px solid #f1f5f9;
-                        background:{$rowBg};
-                    '>
-                        <div style='display:flex;align-items:center;gap:8px;padding:0 12px;flex:1;'>
-                            <div style='width:6px;height:6px;border-radius:50%;background:#6366f1;flex-shrink:0;'></div>
-                            <span style='font-size:11px;font-weight:500;color:#111827;'>{$itemName}</span>
-                        </div>
-                        <div style='display:flex;align-items:center;gap:8px;padding:0 12px;flex-shrink:0;'>
-                            <span style='
-                                background:#f1f5f9;border:1px solid #e2e8f0;
-                                border-radius:999px;padding:1px 10px;
-                                font-size:10px;color:#374151;
-                            '>{$size}</span>
-                            <span style='
-                                background:#eff6ff;border:1px solid #bfdbfe;
-                                border-radius:999px;padding:1px 10px;
-                                font-size:12px;font-weight:800;color:#1d4ed8;
-                                min-width:32px;text-align:center;
-                            '>{$qty}</span>
-                        </div>
-                    </div>
-                ";
-            }
-
-            if (empty($itemRowsHtml)) {
-                $itemRowsHtml = "
-                    <div style='padding:10px 12px;font-size:11px;color:#9ca3af;text-align:center;'>
-                        No issued items.
-                    </div>
-                ";
-            }
-
-            $fields[] = \Filament\Forms\Components\Placeholder::make("tx_recipient_{$recipient->id}")
-                ->label('')
-                ->columnSpanFull()
-                ->content(new \Illuminate\Support\HtmlString("
-                    <div style='
-                        border:1px solid #e2e8f0;
-                        border-radius:10px;
-                        overflow:hidden;
-                        margin-bottom:{$mb};
-                        box-shadow:0 1px 3px rgba(0,0,0,.04);
-                    '>
-                        <!-- Employee header -->
-                        <div style='
-                            background:linear-gradient(to right,#f0f4ff,#f8fafc);
-                            border-bottom:1px solid #e2e8f0;
-                            padding:10px 14px;
-                            display:flex;align-items:center;justify-content:space-between;
-                        '>
-                            <div>
-                                <div style='font-size:13px;font-weight:700;color:#111827;'>👤 {$empName}</div>
-                                <div style='font-size:10px;color:#6b7280;margin-top:2px;'>
-                                    📌 {$posName}
-                                    &nbsp;·&nbsp;
-                                    🔖 TXN: {$txnId}
-                                </div>
-                            </div>
-                            <span style='
-                                background:#ecfdf5;border:1px solid #a7f3d0;
-                                border-radius:999px;padding:3px 12px;
-                                font-size:11px;font-weight:700;color:#059669;
-                            '>{$empTotal} pc(s)</span>
-                        </div>
-
-                        <!-- Item column headers -->
-                        <div style='
-                            display:flex;justify-content:space-between;
-                            background:#1e3a5f;
-                            padding:5px 12px;
-                        '>
-                            <span style='font-size:9px;font-weight:700;color:#fff;text-transform:uppercase;letter-spacing:.05em;'>
-                                Item / Description
-                            </span>
-                            <div style='display:flex;gap:8px;'>
-                                <span style='font-size:9px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em;width:60px;text-align:center;'>
-                                    Size
-                                </span>
-                                <span style='font-size:9px;font-weight:700;color:#93c5fd;text-transform:uppercase;letter-spacing:.05em;width:48px;text-align:center;'>
-                                    Qty
-                                </span>
-                            </div>
-                        </div>
-
-                        <!-- Item rows -->
-                        <div>{$itemRowsHtml}</div>
-                    </div>
-                "));
-        }
-
-        // ── Grand total footer bar ────────────────────────────────────────────────
-        $fields[] = \Filament\Forms\Components\Placeholder::make('tx_totals')
-            ->label('')
-            ->columnSpanFull()
-            ->content(new \Illuminate\Support\HtmlString("
-                <div style='
-                    display:flex;align-items:center;justify-content:flex-end;gap:16px;
-                    background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;
-                    padding:10px 16px;margin-top:4px;
-                '>
-                    <span style='font-size:11px;color:#9ca3af;margin-right:auto;'>Grand Total</span>
-                    <div style='text-align:center;'>
-                        <div style='font-size:18px;font-weight:900;color:#1d4ed8;'>{$totalLines}</div>
-                        <div style='font-size:9px;color:#9ca3af;text-transform:uppercase;'>Lines</div>
-                    </div>
-                    <div style='width:1px;background:#e2e8f0;align-self:stretch;'></div>
-                    <div style='text-align:center;'>
-                        <div style='font-size:18px;font-weight:900;color:#059669;'>{$totalPcs}</div>
-                        <div style='font-size:9px;color:#9ca3af;text-transform:uppercase;'>Pieces</div>
-                    </div>
-                </div>
-            "));
-
-        return $fields;
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Receiving Copy modal builder
-    // ─────────────────────────────────────────────────────────────────────────
-
     private static function buildReceivingCopyModal($record): array
     {
         $record->loadMissing('site', 'issuanceType', 'logs', 'recipients');
@@ -372,13 +136,21 @@ class UniformIssuancesTable
             ? \Carbon\Carbon::parse($record->issued_at)->format('F d, Y')
             : now()->format('F d, Y');
 
+        // ── Partition logs ────────────────────────────────────────────────────────
         $releaseLogs = $record->logs
             ->whereIn('action', ['partial', 'issued'])
             ->filter(fn ($log) => self::isJsonSnapshot($log->note))
             ->sortBy('created_at')
             ->values();
 
+        $changeLogs = $record->logs
+            ->where('action', 'item_changed')
+            ->filter(fn ($log) => ! empty($log->note) && self::isJsonSnapshot($log->note))
+            ->sortBy('created_at')
+            ->values();
+
         $releaseCount   = $releaseLogs->count();
+        $changeLogCount = $changeLogs->count();
         $recipientCount = $record->recipients->count();
         $allUrl         = url("/receiving-copy/issuance/{$record->id}");
 
@@ -406,6 +178,7 @@ class UniformIssuancesTable
             default    => ['bg' => '#6b7280', 'label' => strtoupper($record->status)],
         };
 
+        // ── Topbar ────────────────────────────────────────────────────────────────
         $fields[] = Placeholder::make('rc_topbar')
             ->label('')
             ->columnSpanFull()
@@ -421,6 +194,7 @@ class UniformIssuancesTable
                         <div style='display:flex;align-items:center;gap:8px;'>
                             <div style='font-size:14px;font-weight:800;color:#fff;'>📄 Uniform Receiving Copy</div>
                             <span style='background:{$statusBadge['bg']};color:#fff;font-size:9px;font-weight:800;padding:2px 10px;border-radius:999px;letter-spacing:.06em;'>{$statusBadge['label']}</span>
+                            " . ($changeLogCount > 0 ? "<span style='background:#f59e0b;color:#fff;font-size:9px;font-weight:800;padding:2px 10px;border-radius:999px;'>🔄 {$changeLogCount} Item Change(s)</span>" : '') . "
                         </div>
                         <div style='font-size:11px;color:#93c5fd;margin-top:3px;'>
                             {$siteName} &nbsp;·&nbsp; {$issuanceTypeName} &nbsp;·&nbsp; {$issuanceDate}
@@ -444,6 +218,7 @@ class UniformIssuancesTable
                 </div>
             "));
 
+        // ── Section A: Release Logs ───────────────────────────────────────────────
         if ($releaseCount > 0) {
             foreach ($releaseLogs as $batchIdx => $log) {
                 $batchNo  = $batchIdx + 1;
@@ -463,7 +238,7 @@ class UniformIssuancesTable
                 $subTextColor    = $isFinal ? '#047857' : '#78350f';
                 $btnBg           = $isFinal ? '#059669' : '#f59e0b';
                 $btnHover        = $isFinal ? '#047857' : '#d97706';
-                $mb              = $isLast ? '0' : '12px';
+                $mb              = ($batchIdx < $releaseCount - 1 || $changeLogCount > 0) ? '12px' : '0';
 
                 $byEmployee = [];
                 foreach ($snap as $row) {
@@ -476,22 +251,45 @@ class UniformIssuancesTable
                     $byEmployee[$employeeName][] = ['item' => $itemPart, 'qty' => $released];
                 }
 
+                // Per-employee print buttons inside this release batch
                 $employeeCards = '';
                 foreach ($byEmployee as $empName => $empItems) {
-                    $empName  = e($empName);
-                    $total    = array_sum(array_column($empItems, 'qty'));
-                    $itemList = implode('', array_map(
+                    $safeEmpName = e($empName);
+                    $total       = array_sum(array_column($empItems, 'qty'));
+                    $itemList    = implode('', array_map(
                         fn ($i) => "<div style='font-size:10px;color:#374151;padding:2px 0;border-bottom:1px solid #f3f4f6;display:flex;justify-content:space-between;'>"
                                  . "<span>" . e($i['item']) . "</span>"
                                  . "<span style='font-weight:700;color:#1d4ed8;'>" . $i['qty'] . "</span>"
                                  . "</div>",
                         $empItems
                     ));
+
+                    // Find recipient for individual print link
+                    $recipient    = $record->recipients->first(fn ($r) => strtolower(trim($r->employee_name)) === strtolower($empName));
+                    $indivUrl     = $recipient ? url("/receiving-copy/recipient/{$recipient->id}") : null;
+                    $indivBtnHtml = $indivUrl
+                        ? "<a href='{$indivUrl}' target='_blank'
+                              style='display:inline-flex;align-items:center;gap:4px;padding:3px 10px;background:#fff;border:1px solid #bfdbfe;border-radius:6px;font-size:10px;font-weight:700;color:#2563eb;text-decoration:none;flex-shrink:0;'
+                              title='Print full RC for {$safeEmpName}'
+                              onmouseover=\"this.style.background='#eff6ff'\"
+                              onmouseout=\"this.style.background='#fff'\">
+                                <svg width='10' height='10' fill='none' stroke='currentColor' stroke-width='2' viewBox='0 0 24 24'>
+                                    <polyline points='6 9 6 2 18 2 18 9'/>
+                                    <path d='M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2'/>
+                                    <rect x='6' y='14' width='12' height='8'/>
+                                </svg>
+                                Print RC
+                           </a>"
+                        : '';
+
                     $employeeCards .= "
                         <div style='background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;margin-top:8px;'>
-                            <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;'>
-                                <span style='font-size:12px;font-weight:700;color:#111827;'>👤 {$empName}</span>
-                                <span style='background:#ecfdf5;border:1px solid #a7f3d0;border-radius:999px;padding:1px 8px;font-size:10px;font-weight:700;color:#059669;'>{$total} item(s)</span>
+                            <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;gap:8px;'>
+                                <span style='font-size:12px;font-weight:700;color:#111827;'>👤 {$safeEmpName}</span>
+                                <div style='display:flex;align-items:center;gap:6px;flex-shrink:0;'>
+                                    <span style='background:#ecfdf5;border:1px solid #a7f3d0;border-radius:999px;padding:1px 8px;font-size:10px;font-weight:700;color:#059669;'>{$total} item(s)</span>
+                                    {$indivBtnHtml}
+                                </div>
                             </div>
                             {$itemList}
                         </div>
@@ -535,76 +333,523 @@ class UniformIssuancesTable
                         </div>
                     "));
             }
+        } else {
+            // No release logs — show recipients with per-employee print
+            $record->loadMissing('recipients.position', 'recipients.items.item');
 
-            return $fields;
+            foreach ($record->recipients as $idx => $recipient) {
+                $emp    = e($recipient->employee_name ?? '—');
+                $pos    = e($recipient->position?->name ?? '—');
+                $txn    = e($recipient->transaction_id ?? '—');
+                $recUrl = url("/receiving-copy/recipient/{$recipient->id}");
+                $mb     = ($idx < $record->recipients->count() - 1 || $changeLogCount > 0) ? '10px' : '0';
+
+                $itemPreview = '';
+                $total       = 0;
+                foreach ($recipient->items as $i => $item) {
+                    $n    = e($item->item?->name ?? "Item #{$item->item_id}");
+                    $s    = e($item->size ?? '—');
+                    $q    = (int) ($item->released_quantity ?: $item->quantity);
+                    $total += $q;
+                    $bg   = $i % 2 === 0 ? '#ffffff' : '#f8fafc';
+                    $itemPreview .= "
+                        <tr style='background:{$bg};'>
+                            <td style='padding:4px 10px;font-size:11px;color:#111827;font-weight:500;border-bottom:1px solid #f1f5f9;'>{$n}</td>
+                            <td style='padding:4px 10px;font-size:11px;color:#475569;text-align:center;border-bottom:1px solid #f1f5f9;'>
+                                <span style='background:#f1f5f9;border-radius:999px;padding:1px 8px;font-size:10px;'>{$s}</span>
+                            </td>
+                            <td style='padding:4px 10px;font-size:12px;font-weight:800;color:#1d4ed8;text-align:center;border-bottom:1px solid #f1f5f9;'>{$q}</td>
+                        </tr>
+                    ";
+                }
+
+                $fields[] = Placeholder::make("rc_rec_{$recipient->id}")
+                    ->label('')
+                    ->columnSpanFull()
+                    ->content(new HtmlString("
+                        <div style='border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;margin-bottom:{$mb};'>
+                            <div style='background:linear-gradient(to right,#f0f4ff,#f8fafc);border-bottom:1px solid #e2e8f0;padding:10px 14px;display:flex;align-items:center;justify-content:space-between;'>
+                                <div>
+                                    <div style='font-size:13px;font-weight:700;color:#111827;'>{$emp}</div>
+                                    <div style='font-size:10px;color:#6b7280;margin-top:1px;'>📌 {$pos} &nbsp;·&nbsp; 🔖 TXN: {$txn}</div>
+                                </div>
+                                <div style='display:flex;align-items:center;gap:8px;'>
+                                    <span style='background:#ecfdf5;border:1px solid #a7f3d0;border-radius:999px;padding:2px 10px;font-size:10px;font-weight:700;color:#059669;'>{$total} item(s)</span>
+                                    <a href='{$recUrl}' target='_blank'
+                                        style='display:inline-flex;align-items:center;gap:5px;padding:5px 12px;background:#fff;border:1px solid #c7d2fe;border-radius:7px;font-size:10px;font-weight:700;color:#4f46e5;text-decoration:none;'
+                                        onmouseover=\"this.style.background='#eef2ff'\"
+                                        onmouseout=\"this.style.background='#fff'\"
+                                    >
+                                        <svg width='11' height='11' fill='none' stroke='currentColor' stroke-width='2' viewBox='0 0 24 24'>
+                                            <polyline points='6 9 6 2 18 2 18 9'/>
+                                            <path d='M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2'/>
+                                            <rect x='6' y='14' width='12' height='8'/>
+                                        </svg>
+                                        Print RC
+                                    </a>
+                                </div>
+                            </div>
+                            <table style='width:100%;border-collapse:collapse;'>
+                                <thead>
+                                    <tr style='background:#1e3a5f;'>
+                                        <th style='padding:6px 10px;text-align:left;font-size:9px;font-weight:700;color:#fff;text-transform:uppercase;'>Item</th>
+                                        <th style='padding:6px 10px;text-align:center;font-size:9px;font-weight:700;color:#93c5fd;text-transform:uppercase;width:70px;'>Size</th>
+                                        <th style='padding:6px 10px;text-align:center;font-size:9px;font-weight:700;color:#93c5fd;text-transform:uppercase;width:55px;'>Qty</th>
+                                    </tr>
+                                </thead>
+                                <tbody>{$itemPreview}</tbody>
+                            </table>
+                        </div>
+                    "));
+            }
         }
 
-        $record->loadMissing('recipients.position', 'recipients.items.item');
+        // ── Section B: Item Change Logs ───────────────────────────────────────────
+        if ($changeLogCount > 0) {
 
-        foreach ($record->recipients as $idx => $recipient) {
-            $emp    = e($recipient->employee_name ?? '—');
-            $pos    = e($recipient->position?->name ?? '—');
-            $txn    = e($recipient->transaction_id ?? '—');
-            $recUrl = url("/receiving-copy/recipient/{$recipient->id}");
-            $mb     = ($idx < $record->recipients->count() - 1) ? '10px' : '0';
-
-            $itemPreview = '';
-            $total       = 0;
-            foreach ($recipient->items as $i => $item) {
-                $n    = e($item->item?->name ?? "Item #{$item->item_id}");
-                $s    = e($item->size ?? '—');
-                $q    = (int) ($item->released_quantity ?: $item->quantity);
-                $total += $q;
-                $bg   = $i % 2 === 0 ? '#ffffff' : '#f8fafc';
-                $itemPreview .= "
-                    <tr style='background:{$bg};'>
-                        <td style='padding:4px 10px;font-size:11px;color:#111827;font-weight:500;border-bottom:1px solid #f1f5f9;'>{$n}</td>
-                        <td style='padding:4px 10px;font-size:11px;color:#475569;text-align:center;border-bottom:1px solid #f1f5f9;'>
-                            <span style='background:#f1f5f9;border-radius:999px;padding:1px 8px;font-size:10px;'>{$s}</span>
-                        </td>
-                        <td style='padding:4px 10px;font-size:12px;font-weight:800;color:#1d4ed8;text-align:center;border-bottom:1px solid #f1f5f9;'>{$q}</td>
-                    </tr>
-                ";
-            }
-
-            $fields[] = Placeholder::make("rc_rec_{$recipient->id}")
+            // Divider
+            $fields[] = Placeholder::make('rc_change_divider')
                 ->label('')
                 ->columnSpanFull()
                 ->content(new HtmlString("
-                    <div style='border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;margin-bottom:{$mb};'>
-                        <div style='background:linear-gradient(to right,#f0f4ff,#f8fafc);border-bottom:1px solid #e2e8f0;padding:10px 14px;display:flex;align-items:center;justify-content:space-between;'>
-                            <div>
-                                <div style='font-size:13px;font-weight:700;color:#111827;'>{$emp}</div>
-                                <div style='font-size:10px;color:#6b7280;margin-top:1px;'>📌 {$pos} &nbsp;·&nbsp; 🔖 TXN: {$txn}</div>
-                            </div>
-                            <div style='display:flex;align-items:center;gap:8px;'>
-                                <span style='background:#ecfdf5;border:1px solid #a7f3d0;border-radius:999px;padding:2px 10px;font-size:10px;font-weight:700;color:#059669;'>{$total} item(s)</span>
-                                <a href='{$recUrl}' target='_blank'
-                                    style='display:inline-flex;align-items:center;gap:5px;padding:5px 12px;background:#fff;border:1px solid #c7d2fe;border-radius:7px;font-size:10px;font-weight:700;color:#4f46e5;text-decoration:none;'
-                                    onmouseover=\"this.style.background='#eef2ff'\"
-                                    onmouseout=\"this.style.background='#fff'\"
-                                >
-                                    <svg width='11' height='11' fill='none' stroke='currentColor' stroke-width='2' viewBox='0 0 24 24'>
-                                        <polyline points='6 9 6 2 18 2 18 9'/>
-                                        <path d='M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2'/>
-                                        <rect x='6' y='14' width='12' height='8'/>
-                                    </svg>
-                                    Individual Copy
-                                </a>
-                            </div>
-                        </div>
-                        <table style='width:100%;border-collapse:collapse;'>
-                            <thead>
-                                <tr style='background:#1e3a5f;'>
-                                    <th style='padding:6px 10px;text-align:left;font-size:9px;font-weight:700;color:#fff;text-transform:uppercase;'>Item</th>
-                                    <th style='padding:6px 10px;text-align:center;font-size:9px;font-weight:700;color:#93c5fd;text-transform:uppercase;width:70px;'>Size</th>
-                                    <th style='padding:6px 10px;text-align:center;font-size:9px;font-weight:700;color:#93c5fd;text-transform:uppercase;width:55px;'>Qty</th>
-                                </tr>
-                            </thead>
-                            <tbody>{$itemPreview}</tbody>
-                        </table>
+                    <div style='display:flex;align-items:center;gap:10px;margin:8px 0 4px;'>
+                        <div style='flex:1;height:2px;background:linear-gradient(to right,#f59e0b,transparent);'></div>
+                        <span style='
+                            background:#fef3c7;border:1.5px solid #f59e0b;
+                            border-radius:999px;padding:3px 14px;
+                            font-size:10px;font-weight:800;color:#92400e;
+                            letter-spacing:.06em;
+                        '>🔄 ITEM CHANGES</span>
+                        <div style='flex:1;height:2px;background:linear-gradient(to left,#f59e0b,transparent);'></div>
                     </div>
                 "));
+
+            foreach ($changeLogs as $chIdx => $log) {
+                $logDate  = \Carbon\Carbon::parse($log->created_at)->timezone('Asia/Manila')->format('M d, Y h:i A');
+                $snap     = json_decode($log->note, true);
+                $isLast   = $chIdx === $changeLogCount - 1;
+                $mb       = $isLast ? '0' : '12px';
+
+                // Build per-employee change summary
+                $employeeChanges = [];
+                foreach ($snap as $row) {
+                    $empName   = trim($row['label'] ?? 'Unknown');
+                    $fromLabel = $row['_from'] ?? '—';
+                    $toLabel   = $row['_to'] ?? '—';
+                    $employeeChanges[$empName] = ['from' => $fromLabel, 'to' => $toLabel, 'qty' => (int)($row['released'] ?? 0)];
+                }
+
+                $changeCards = '';
+                foreach ($employeeChanges as $empName => $change) {
+                    $safeEmpName = e($empName);
+                    $safeFrom    = e($change['from']);
+                    $safeTo      = e($change['to']);
+
+                    $recipient = $record->recipients->first(fn ($r) => strtolower(trim($r->employee_name)) === strtolower($empName));
+                    $indivUrl  = $recipient ? url("/receiving-copy/recipient/{$recipient->id}") : null;
+
+                    $changedOnlyUrl = url("/receiving-copy/log/{$log->id}/changed-only");
+
+                    $changeCards .= "
+                        <div style='background:#fff;border:1px solid #fde68a;border-radius:8px;padding:10px 12px;margin-top:8px;'>
+                            <div style='display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:6px;'>
+                                <span style='font-size:12px;font-weight:700;color:#111827;'>👤 {$safeEmpName}</span>
+                                <div style='display:flex;gap:5px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end;'>
+                                    " . ($indivUrl ? "
+                                    <a href='{$indivUrl}' target='_blank'
+                                        style='display:inline-flex;align-items:center;gap:4px;padding:3px 9px;background:#f0fdf4;border:1px solid #a7f3d0;border-radius:6px;font-size:10px;font-weight:700;color:#059669;text-decoration:none;'
+                                        title='Print full updated RC for {$safeEmpName}'
+                                        onmouseover=\"this.style.background='#dcfce7'\"
+                                        onmouseout=\"this.style.background='#f0fdf4'\">
+                                        <svg width='10' height='10' fill='none' stroke='currentColor' stroke-width='2' viewBox='0 0 24 24'>
+                                            <polyline points='6 9 6 2 18 2 18 9'/>
+                                            <path d='M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2'/>
+                                            <rect x='6' y='14' width='12' height='8'/>
+                                        </svg>
+                                        Full RC
+                                    </a>" : '') . "
+                                    <a href='{$changedOnlyUrl}' target='_blank'
+                                        style='display:inline-flex;align-items:center;gap:4px;padding:3px 9px;background:#fef3c7;border:1px solid #f59e0b;border-radius:6px;font-size:10px;font-weight:700;color:#92400e;text-decoration:none;'
+                                        title='Print change receipt (changed item only)'
+                                        onmouseover=\"this.style.background='#fde68a'\"
+                                        onmouseout=\"this.style.background='#fef3c7'\">
+                                        <svg width='10' height='10' fill='none' stroke='currentColor' stroke-width='2' viewBox='0 0 24 24'>
+                                            <path stroke-linecap='round' stroke-linejoin='round' d='M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z'/>
+                                        </svg>
+                                        Changed Item Only
+                                    </a>
+                                </div>
+                            </div>
+                            <div style='display:flex;flex-direction:column;gap:4px;'>
+                                <div style='display:flex;align-items:center;gap:6px;'>
+                                    <span style='font-size:10px;font-weight:700;color:#9ca3af;width:36px;text-align:right;'>WAS:</span>
+                                    <span style='background:#fef2f2;border:1px solid #fecaca;border-radius:6px;padding:2px 10px;font-size:11px;color:#dc2626;font-weight:600;text-decoration:line-through;'>{$safeFrom}</span>
+                                </div>
+                                <div style='display:flex;align-items:center;gap:6px;'>
+                                    <span style='font-size:10px;font-weight:700;color:#9ca3af;width:36px;text-align:right;'>NOW:</span>
+                                    <span style='background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:2px 10px;font-size:11px;color:#16a34a;font-weight:700;'>{$safeTo}</span>
+                                </div>
+                            </div>
+                        </div>
+                    ";
+                }
+
+                $fields[] = Placeholder::make("rc_change_{$log->id}")
+                    ->label('')
+                    ->columnSpanFull()
+                    ->content(new HtmlString("
+                        <div style='border:2px solid #f59e0b;border-radius:10px;overflow:hidden;margin-bottom:{$mb};'>
+                            <div style='
+                                background:linear-gradient(to right,#fffbeb,#fef3c7);
+                                border-bottom:1px solid #fde68a;padding:10px 14px;
+                                display:flex;align-items:center;justify-content:space-between;
+                            '>
+                                <div>
+                                    <div style='display:flex;align-items:center;gap:8px;'>
+                                        <span style='background:#f59e0b;color:#fff;font-size:10px;font-weight:800;padding:2px 10px;border-radius:999px;'>🔄 Item Change #{$chIdx}</span>
+                                        <span style='font-size:11px;color:#92400e;font-weight:600;'>{$logDate}</span>
+                                    </div>
+                                    <div style='font-size:10px;color:#78350f;margin-top:3px;'>
+                                        By: <strong>{$log->performed_by}</strong>
+                                        &nbsp;·&nbsp; " . count($employeeChanges) . " employee(s) affected
+                                    </div>
+                                </div>
+                            </div>
+                            <div style='padding:10px 14px;'>
+                                {$changeCards}
+                            </div>
+                        </div>
+                    "));
+            }
+        }
+
+        return $fields;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // TRANSMITTAL MODAL
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private static function buildTransmittalModal($record): array
+    {
+        $record->loadMissing(
+            'site',
+            'issuanceType',
+            'transmittal',
+            'logs',
+            'recipients.position',
+            'recipients.items.item'
+        );
+
+        $txn      = $record->transmittal;
+        $txnNo    = $txn?->transmittal_number ?? null;
+        $txnTo    = e($record->transmitted_to ?? $txn?->transmitted_to ?? '—');
+        $txnBy    = e($txn?->transmitted_by ?? auth()->user()?->name ?? '—');
+        $txnDate  = $txn?->created_at
+            ? \Carbon\Carbon::parse($txn->created_at)->timezone('Asia/Manila')->format('F d, Y')
+            : now()->format('F d, Y');
+
+        $siteName         = e($record->site?->name ?? '—');
+        $issuanceTypeName = e($record->issuanceType?->name ?? '—');
+
+        $printUrl = url("/transmittal-copy/issuance/{$record->id}/all");
+
+        $changeLogs = $record->logs
+            ->where('action', 'item_changed')
+            ->filter(fn ($log) => ! empty($log->note) && self::isJsonSnapshot($log->note))
+            ->sortBy('created_at')
+            ->values();
+
+        $changeLogCount = $changeLogs->count();
+
+        $statusBadge = match ($record->status) {
+            'partial'  => ['bg' => '#f59e0b', 'label' => 'PARTIAL'],
+            'issued'   => ['bg' => '#059669', 'label' => 'ISSUED'],
+            'returned' => ['bg' => '#dc2626', 'label' => 'RETURNED'],
+            default    => ['bg' => '#6b7280', 'label' => strtoupper($record->status)],
+        };
+
+        $txnBadgeHtml = $txnNo
+            ? "<span style='background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.3);color:#fff;font-size:11px;font-weight:800;padding:2px 12px;border-radius:999px;letter-spacing:.05em;'>
+                   📋 {$txnNo}
+               </span>"
+            : "<span style='background:rgba(255,255,255,.1);color:#fde68a;font-size:10px;font-weight:700;padding:2px 10px;border-radius:999px;'>
+                   ⚠ No transmittal number yet
+               </span>";
+
+        $totalLines = 0;
+        $totalPcs   = 0;
+        foreach ($record->recipients as $recipient) {
+            foreach ($recipient->items as $item) {
+                $qty = (int) ($item->released_quantity ?: $item->quantity);
+                if ($qty <= 0) continue;
+                $totalLines++;
+                $totalPcs += $qty;
+            }
+        }
+
+        $fields = [];
+
+        // ── Topbar ────────────────────────────────────────────────────────────────
+        $fields[] = \Filament\Forms\Components\Placeholder::make('tx_topbar')
+            ->label('')
+            ->columnSpanFull()
+            ->content(new \Illuminate\Support\HtmlString("
+                <div style='
+                    display:flex;align-items:center;justify-content:space-between;
+                    padding:12px 16px;
+                    background:linear-gradient(to right,#1e3a5f,#1d4ed8);
+                    border-radius:10px;
+                    margin-bottom:16px;
+                '>
+                    <div>
+                        <div style='display:flex;align-items:center;gap:8px;margin-bottom:4px;'>
+                            <div style='font-size:14px;font-weight:800;color:#fff;'>📮 Transmittal Form</div>
+                            <span style='background:{$statusBadge['bg']};color:#fff;font-size:9px;font-weight:800;padding:2px 10px;border-radius:999px;letter-spacing:.06em;'>
+                                {$statusBadge['label']}
+                            </span>
+                            {$txnBadgeHtml}
+                            " . ($changeLogCount > 0 ? "<span style='background:#f59e0b;color:#fff;font-size:9px;font-weight:800;padding:2px 10px;border-radius:999px;'>🔄 {$changeLogCount} Amendment(s)</span>" : '') . "
+                        </div>
+                        <div style='font-size:11px;color:#93c5fd;margin-top:2px;'>
+                            {$siteName} &nbsp;·&nbsp; {$issuanceTypeName} &nbsp;·&nbsp; {$txnDate}
+                            &nbsp;·&nbsp; To: <strong style='color:#fff;'>{$txnTo}</strong>
+                            &nbsp;·&nbsp; By: <strong style='color:#fff;'>{$txnBy}</strong>
+                            &nbsp;·&nbsp; <strong style='color:#fff;'>{$totalLines}</strong> line(s)
+                            &nbsp;·&nbsp; <strong style='color:#fff;'>{$totalPcs}</strong> pc(s)
+                        </div>
+                    </div>
+                    <a
+                        href='{$printUrl}'
+                        target='_blank'
+                        style='display:inline-flex;align-items:center;gap:7px;padding:9px 18px;background:#fff;color:#1e3a5f;border-radius:8px;font-size:12px;font-weight:800;text-decoration:none;flex-shrink:0;'
+                        onmouseover=\"this.style.opacity='.88'\"
+                        onmouseout=\"this.style.opacity='1'\"
+                    >
+                        <svg width='14' height='14' fill='none' stroke='currentColor' stroke-width='2' viewBox='0 0 24 24'>
+                            <polyline points='6 9 6 2 18 2 18 9'/>
+                            <path d='M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2'/>
+                            <rect x='6' y='14' width='12' height='8'/>
+                        </svg>
+                        Print All
+                    </a>
+                </div>
+            "));
+
+        $recipients   = $record->recipients;
+        $recipientCnt = $recipients->count();
+
+        if ($recipientCnt === 0) {
+            $fields[] = \Filament\Forms\Components\Placeholder::make('tx_empty')
+                ->label('')
+                ->columnSpanFull()
+                ->content(new \Illuminate\Support\HtmlString("
+                    <div style='text-align:center;padding:32px 0;color:#9ca3af;font-size:13px;'>
+                        No recipients found for this issuance.
+                    </div>
+                "));
+            return $fields;
+        }
+
+        foreach ($recipients as $idx => $recipient) {
+            $empName  = e($recipient->employee_name ?? 'Unknown Employee');
+            $posName  = e($recipient->position?->name ?? '—');
+            $txnId    = e($recipient->transaction_id ?? '—');
+            $isLast   = $idx === $recipientCnt - 1;
+            $mb       = ($isLast && $changeLogCount === 0) ? '0' : '12px';
+
+            $empTotal     = 0;
+            $itemRowsHtml = '';
+
+            foreach ($recipient->items as $ii => $item) {
+                $qty = (int) ($item->released_quantity ?: $item->quantity);
+                if ($qty <= 0) continue;
+
+                $empTotal  += $qty;
+                $itemName   = e($item->item?->name ?? "Item #{$item->item_id}");
+                $size       = e($item->size ?? '—');
+                $rowBg      = $ii % 2 === 0 ? '#ffffff' : '#f8fafc';
+
+                $itemRowsHtml .= "
+                    <div style='
+                        display:flex;justify-content:space-between;align-items:center;
+                        padding:5px 0;border-bottom:1px solid #f1f5f9;background:{$rowBg};
+                    '>
+                        <div style='display:flex;align-items:center;gap:8px;padding:0 12px;flex:1;'>
+                            <div style='width:6px;height:6px;border-radius:50%;background:#6366f1;flex-shrink:0;'></div>
+                            <span style='font-size:11px;font-weight:500;color:#111827;'>{$itemName}</span>
+                        </div>
+                        <div style='display:flex;align-items:center;gap:8px;padding:0 12px;flex-shrink:0;'>
+                            <span style='background:#f1f5f9;border:1px solid #e2e8f0;border-radius:999px;padding:1px 10px;font-size:10px;color:#374151;'>{$size}</span>
+                            <span style='background:#eff6ff;border:1px solid #bfdbfe;border-radius:999px;padding:1px 10px;font-size:12px;font-weight:800;color:#1d4ed8;min-width:32px;text-align:center;'>{$qty}</span>
+                        </div>
+                    </div>
+                ";
+            }
+
+            if (empty($itemRowsHtml)) {
+                $itemRowsHtml = "<div style='padding:10px 12px;font-size:11px;color:#9ca3af;text-align:center;'>No issued items.</div>";
+            }
+
+            $fields[] = \Filament\Forms\Components\Placeholder::make("tx_recipient_{$recipient->id}")
+                ->label('')
+                ->columnSpanFull()
+                ->content(new \Illuminate\Support\HtmlString("
+                    <div style='border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;margin-bottom:{$mb};box-shadow:0 1px 3px rgba(0,0,0,.04);'>
+                        <div style='background:linear-gradient(to right,#f0f4ff,#f8fafc);border-bottom:1px solid #e2e8f0;padding:10px 14px;display:flex;align-items:center;justify-content:space-between;'>
+                            <div>
+                                <div style='font-size:13px;font-weight:700;color:#111827;'>👤 {$empName}</div>
+                                <div style='font-size:10px;color:#6b7280;margin-top:2px;'>
+                                    📌 {$posName} &nbsp;·&nbsp; 🔖 TXN: {$txnId}
+                                </div>
+                            </div>
+                            <span style='background:#ecfdf5;border:1px solid #a7f3d0;border-radius:999px;padding:3px 12px;font-size:11px;font-weight:700;color:#059669;'>{$empTotal} pc(s)</span>
+                        </div>
+                        <div style='background:#1e3a5f;padding:5px 12px;display:flex;justify-content:space-between;'>
+                            <span style='font-size:9px;font-weight:700;color:#fff;text-transform:uppercase;letter-spacing:.05em;'>Item / Description</span>
+                            <div style='display:flex;gap:8px;'>
+                                <span style='font-size:9px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em;width:60px;text-align:center;'>Size</span>
+                                <span style='font-size:9px;font-weight:700;color:#93c5fd;text-transform:uppercase;letter-spacing:.05em;width:48px;text-align:center;'>Qty</span>
+                            </div>
+                        </div>
+                        <div>{$itemRowsHtml}</div>
+                    </div>
+                "));
+        }
+
+        // ── Grand total footer ────────────────────────────────────────────────────
+        $fields[] = \Filament\Forms\Components\Placeholder::make('tx_totals')
+            ->label('')
+            ->columnSpanFull()
+            ->content(new \Illuminate\Support\HtmlString("
+                <div style='
+                    display:flex;align-items:center;justify-content:flex-end;gap:16px;
+                    background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;
+                    padding:10px 16px;margin-top:4px;margin-bottom:" . ($changeLogCount > 0 ? '16px' : '0') . ";
+                '>
+                    <span style='font-size:11px;color:#9ca3af;margin-right:auto;'>Grand Total</span>
+                    <div style='text-align:center;'>
+                        <div style='font-size:18px;font-weight:900;color:#1d4ed8;'>{$totalLines}</div>
+                        <div style='font-size:9px;color:#9ca3af;text-transform:uppercase;'>Lines</div>
+                    </div>
+                    <div style='width:1px;background:#e2e8f0;align-self:stretch;'></div>
+                    <div style='text-align:center;'>
+                        <div style='font-size:18px;font-weight:900;color:#059669;'>{$totalPcs}</div>
+                        <div style='font-size:9px;color:#9ca3af;text-transform:uppercase;'>Pieces</div>
+                    </div>
+                </div>
+            "));
+
+        // ── Section B: Amendment Transmittals ─────────────────────────────────────
+        if ($changeLogCount > 0) {
+
+            $fields[] = \Filament\Forms\Components\Placeholder::make('tx_amendment_divider')
+                ->label('')
+                ->columnSpanFull()
+                ->content(new \Illuminate\Support\HtmlString("
+                    <div style='display:flex;align-items:center;gap:10px;margin:4px 0;'>
+                        <div style='flex:1;height:2px;background:linear-gradient(to right,#f59e0b,transparent);'></div>
+                        <span style='
+                            background:#fef3c7;border:1.5px solid #f59e0b;
+                            border-radius:999px;padding:3px 14px;
+                            font-size:10px;font-weight:800;color:#92400e;
+                            letter-spacing:.06em;
+                        '>🔄 AMENDMENT TRANSMITTALS</span>
+                        <div style='flex:1;height:2px;background:linear-gradient(to left,#f59e0b,transparent);'></div>
+                    </div>
+                    <div style='font-size:11px;color:#78350f;background:#fef3c7;border:1px solid #fde68a;border-radius:8px;padding:8px 12px;margin-top:8px;'>
+                        ℹ️ The <strong>original transmittal #{$txnNo}</strong> remains valid. These amendment transmittals cover only the changed items.
+                        You can print the full updated transmittal or just the changed items.
+                    </div>
+                "));
+
+            foreach ($changeLogs as $chIdx => $log) {
+                $logDate        = \Carbon\Carbon::parse($log->created_at)->timezone('Asia/Manila')->format('M d, Y h:i A');
+                $snap           = json_decode($log->note, true);
+                $isLast         = $chIdx === $changeLogCount - 1;
+                $mb             = $isLast ? '0' : '12px';
+                $amendNo        = $chIdx + 1;
+
+                $changedOnlyUrl  = url("/transmittal-copy/log/{$log->id}/changed-only");
+                $fullUpdatedUrl  = url("/transmittal-copy/log/{$log->id}/full-updated");
+
+                $empChangeRows = '';
+                foreach ($snap as $row) {
+                    $empName   = e(trim($row['label'] ?? 'Unknown'));
+                    $fromLabel = e($row['_from'] ?? '—');
+                    $toLabel   = e($row['_to'] ?? '—');
+
+                    $empChangeRows .= "
+                        <div style='
+                            background:#fff;border:1px solid #fde68a;border-radius:8px;
+                            padding:10px 12px;margin-top:8px;
+                        '>
+                            <div style='font-size:12px;font-weight:700;color:#111827;margin-bottom:6px;'>👤 {$empName}</div>
+                            <div style='display:flex;flex-direction:column;gap:4px;'>
+                                <div style='display:flex;align-items:center;gap:6px;'>
+                                    <span style='font-size:10px;font-weight:700;color:#9ca3af;width:40px;'>BEFORE:</span>
+                                    <span style='background:#fef2f2;border:1px solid #fecaca;border-radius:6px;padding:2px 10px;font-size:11px;color:#dc2626;text-decoration:line-through;'>{$fromLabel}</span>
+                                </div>
+                                <div style='display:flex;align-items:center;gap:6px;'>
+                                    <span style='font-size:10px;font-weight:700;color:#9ca3af;width:40px;'>AFTER:</span>
+                                    <span style='background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:2px 10px;font-size:11px;color:#16a34a;font-weight:700;'>{$toLabel}</span>
+                                </div>
+                            </div>
+                        </div>
+                    ";
+                }
+
+                $fields[] = \Filament\Forms\Components\Placeholder::make("tx_change_{$log->id}")
+                    ->label('')
+                    ->columnSpanFull()
+                    ->content(new \Illuminate\Support\HtmlString("
+                        <div style='border:2px solid #f59e0b;border-radius:10px;overflow:hidden;margin-bottom:{$mb};'>
+                            <div style='
+                                background:linear-gradient(to right,#fffbeb,#fef3c7);
+                                border-bottom:1px solid #fde68a;padding:10px 14px;
+                                display:flex;align-items:center;justify-content:space-between;gap:8px;
+                            '>
+                                <div>
+                                    <div style='display:flex;align-items:center;gap:8px;'>
+                                        <span style='background:#f59e0b;color:#fff;font-size:10px;font-weight:800;padding:2px 10px;border-radius:999px;'>🔄 Amendment #{$amendNo}</span>
+                                        <span style='font-size:11px;color:#92400e;font-weight:600;'>{$logDate}</span>
+                                    </div>
+                                    <div style='font-size:10px;color:#78350f;margin-top:3px;'>
+                                        By: <strong>{$log->performed_by}</strong>
+                                        &nbsp;·&nbsp; " . count($snap) . " change(s)
+                                    </div>
+                                </div>
+                                <div style='display:flex;gap:6px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end;'>
+                                    <a href='{$changedOnlyUrl}' target='_blank'
+                                        style='display:inline-flex;align-items:center;gap:5px;padding:6px 12px;background:#f59e0b;color:#fff;border-radius:8px;font-size:11px;font-weight:800;text-decoration:none;'
+                                        onmouseover=\"this.style.background='#d97706'\"
+                                        onmouseout=\"this.style.background='#f59e0b'\">
+                                        <svg width='12' height='12' fill='none' stroke='currentColor' stroke-width='2' viewBox='0 0 24 24'>
+                                            <polyline points='6 9 6 2 18 2 18 9'/>
+                                            <path d='M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2'/>
+                                            <rect x='6' y='14' width='12' height='8'/>
+                                        </svg>
+                                        Changed Items Only
+                                    </a>
+                                    <a href='{$fullUpdatedUrl}' target='_blank'
+                                        style='display:inline-flex;align-items:center;gap:5px;padding:6px 12px;background:#1d4ed8;color:#fff;border-radius:8px;font-size:11px;font-weight:800;text-decoration:none;'
+                                        onmouseover=\"this.style.background='#1e40af'\"
+                                        onmouseout=\"this.style.background='#1d4ed8'\">
+                                        <svg width='12' height='12' fill='none' stroke='currentColor' stroke-width='2' viewBox='0 0 24 24'>
+                                            <polyline points='6 9 6 2 18 2 18 9'/>
+                                            <path d='M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2'/>
+                                            <rect x='6' y='14' width='12' height='8'/>
+                                        </svg>
+                                        Full Updated Transmittal
+                                    </a>
+                                </div>
+                            </div>
+                            <div style='padding:10px 14px;background:#fffbeb;'>
+                                {$empChangeRows}
+                            </div>
+                        </div>
+                    "));
+            }
         }
 
         return $fields;
@@ -665,8 +910,9 @@ class UniformIssuancesTable
                     ->color('info')
                     ->copyable(),
 
+                // ── Returns column — clickable pill → modal ───────────────────
                 TextColumn::make('note')
-                    ->label('Notes')
+                    ->label('Returns')
                     ->placeholder('—')
                     ->html()
                     ->getStateUsing(function ($record): string {
@@ -674,44 +920,262 @@ class UniformIssuancesTable
 
                         $decoded = json_decode($record->note, true);
 
-                        // Plain text note (legacy)
+                        // Plain-text legacy note
                         if (json_last_error() !== JSON_ERROR_NONE || ! is_array($decoded)) {
                             return '<span style="font-size:11px;color:#6b7280;">' . e($record->note) . '</span>';
                         }
 
-                        // Check if it's a return-tracker array (has 'employee' key)
-                        $isReturnTracker = isset($decoded[0]['employee']);
-                        if (! $isReturnTracker) {
+                        // Must be a return-tracker array (has 'employee' key on first row)
+                        if (! isset($decoded[0]['employee'])) {
                             return '<span style="font-size:11px;color:#6b7280;">—</span>';
                         }
 
-                        // Group by date+performer batch (same 'at' + 'by')
-                        $total = array_sum(array_column($decoded, 'qty'));
-                        $count = count($decoded);
-                        $latest = end($decoded);
-                        $latestAt = $latest['at'] ?? null;
-                        $latestBy = e($latest['by'] ?? '');
-
-                        $dateStr = $latestAt
-                            ? \Carbon\Carbon::parse($latestAt)->format('M d')
+                        $total   = array_sum(array_column($decoded, 'qty'));
+                        $count   = count($decoded);
+                        $latest  = end($decoded);
+                        $dateStr = isset($latest['at'])
+                            ? \Carbon\Carbon::parse($latest['at'])->format('M d')
                             : '—';
 
                         return "
-                            <div style='display:flex;flex-direction:column;gap:2px;'>
+                            <div style='display:inline-flex;flex-direction:column;gap:2px;cursor:pointer;'>
                                 <span style='
                                     display:inline-flex;align-items:center;gap:4px;
                                     background:#fef2f2;border:1px solid #fecaca;
                                     border-radius:999px;padding:2px 8px;
                                     font-size:10px;font-weight:700;color:#dc2626;
                                     width:fit-content;
-                                '>
-                                    ↩ {$total} pc(s) returned
-                                </span>
-                                <span style='font-size:10px;color:#9ca3af;'>{$count} line(s) · {$dateStr}</span>
+                                '>↩ {$total} pc(s) returned</span>
                             </div>
                         ";
-                    }),
+                    })
+                    ->action(
+                        Action::make('view_returns')
+                            ->label('Return History')
+                            ->modalHeading(fn ($record) => 'Return History — ' . ($record->site?->name ?? 'Issuance'))
+                            ->modalSubmitAction(false)
+                            ->modalCancelActionLabel('Close')
+                            ->modalWidth('lg')
+                            ->form(function ($record): array {
+                                if (! $record->note) {
+                                    return [
+                                        Placeholder::make('_empty')
+                                            ->label('')
+                                            ->columnSpanFull()
+                                            ->content(new HtmlString("
+                                                <div style='text-align:center;padding:32px 0;color:#9ca3af;font-size:13px;'>
+                                                    No return records found.
+                                                </div>
+                                            ")),
+                                    ];
+                                }
+
+                                $decoded = json_decode($record->note, true);
+
+                                if (
+                                    json_last_error() !== JSON_ERROR_NONE
+                                    || ! is_array($decoded)
+                                    || ! isset($decoded[0]['employee'])
+                                ) {
+                                    return [
+                                        Placeholder::make('_bad')
+                                            ->label('')
+                                            ->columnSpanFull()
+                                            ->content(new HtmlString("
+                                                <div style='text-align:center;padding:32px 0;color:#9ca3af;font-size:13px;'>
+                                                    No structured return data.
+                                                </div>
+                                            ")),
+                                    ];
+                                }
+
+                                // ── Group into batches by (at + by) ──────────────────────────────
+                                $batches = [];
+                                foreach ($decoded as $row) {
+                                    $key = ($row['at'] ?? 'unknown') . '||' . ($row['by'] ?? 'unknown');
+                                    $batches[$key][] = $row;
+                                }
+
+                                $totalPcs   = array_sum(array_column($decoded, 'qty'));
+                                $totalLines = count($decoded);
+                                $batchCount = count($batches);
+                                $fields     = [];
+
+                                // ── Summary header ────────────────────────────────────────────────
+                                $fields[] = Placeholder::make('_return_header')
+                                    ->label('')
+                                    ->columnSpanFull()
+                                    ->content(new HtmlString("
+                                        <div style='
+                                            display:flex;align-items:center;justify-content:space-between;
+                                            padding:12px 16px;
+                                            background:linear-gradient(to right,#7f1d1d,#dc2626);
+                                            border-radius:10px;
+                                            margin-bottom:12px;
+                                        '>
+                                            <div>
+                                                <div style='font-size:14px;font-weight:800;color:#fff;'>↩ Return History</div>
+                                                <div style='font-size:11px;color:#fca5a5;margin-top:2px;'>
+                                                    {$batchCount} batch(es) &nbsp;·&nbsp; {$totalLines} line(s)
+                                                </div>
+                                            </div>
+                                            <div style='display:flex;gap:8px;'>
+                                                <div style='
+                                                    background:rgba(255,255,255,.15);
+                                                    border:1px solid rgba(255,255,255,.25);
+                                                    border-radius:10px;padding:8px 14px;text-align:center;
+                                                '>
+                                                    <div style='font-size:20px;font-weight:900;color:#fff;line-height:1;'>{$totalPcs}</div>
+                                                    <div style='font-size:9px;color:#fca5a5;text-transform:uppercase;margin-top:2px;'>Pieces</div>
+                                                </div>
+                                                <div style='
+                                                    background:rgba(255,255,255,.15);
+                                                    border:1px solid rgba(255,255,255,.25);
+                                                    border-radius:10px;padding:8px 14px;text-align:center;
+                                                '>
+                                                    <div style='font-size:20px;font-weight:900;color:#fff;line-height:1;'>{$totalLines}</div>
+                                                    <div style='font-size:9px;color:#fca5a5;text-transform:uppercase;margin-top:2px;'>Lines</div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    "));
+
+                                // ── Per-batch cards ───────────────────────────────────────────────
+                                $batchIdx = 0;
+                                foreach ($batches as $batchKey => $rows) {
+                                    $batchIdx++;
+                                    [$batchAt, $batchBy] = explode('||', $batchKey, 2);
+
+                                    $batchDateStr = $batchAt !== 'unknown'
+                                        ? \Carbon\Carbon::parse($batchAt)
+                                            ->timezone('Asia/Manila')
+                                            ->format('M d, Y h:i A')
+                                        : '—';
+
+                                    $batchTotal = array_sum(array_column($rows, 'qty'));
+                                    $isLast     = $batchIdx === $batchCount;
+                                    $mb         = $isLast ? '0' : '12px';
+                                    $lineCount  = count($rows);
+
+                                    // ── Item rows ─────────────────────────────────────────────────
+                                    $rowsHtml = '';
+                                    foreach ($rows as $i => $row) {
+                                        $emp  = e($row['employee'] ?? '—');
+                                        $item = e($row['item'] ?? '—');
+                                        $size = e($row['size'] ?? '—');
+                                        $qty  = (int) ($row['qty'] ?? 0);
+                                        $bg   = $i % 2 === 0 ? '#ffffff' : '#fafafa';
+
+                                        $rowsHtml .= "
+                                            <tr style='background:{$bg};'>
+                                                <td style='
+                                                    padding:8px 12px;font-size:12px;font-weight:600;
+                                                    color:#111827;border-bottom:1px solid #f1f5f9;
+                                                '>
+                                                    <div style='display:flex;align-items:center;gap:6px;'>
+                                                        <div style='
+                                                            width:6px;height:6px;border-radius:50%;
+                                                            background:#dc2626;flex-shrink:0;
+                                                        '></div>
+                                                        {$emp}
+                                                    </div>
+                                                </td>
+                                                <td style='padding:8px 12px;font-size:12px;color:#374151;border-bottom:1px solid #f1f5f9;'>
+                                                    {$item}
+                                                </td>
+                                                <td style='padding:8px 12px;text-align:center;border-bottom:1px solid #f1f5f9;'>
+                                                    <span style='
+                                                        background:#f1f5f9;border:1px solid #e2e8f0;
+                                                        border-radius:999px;padding:1px 8px;
+                                                        font-size:11px;color:#374151;
+                                                    '>{$size}</span>
+                                                </td>
+                                                <td style='padding:8px 12px;text-align:center;border-bottom:1px solid #f1f5f9;'>
+                                                    <span style='
+                                                        background:#fef2f2;border:1px solid #fecaca;
+                                                        border-radius:999px;padding:1px 10px;
+                                                        font-size:12px;font-weight:800;color:#dc2626;
+                                                    '>{$qty}</span>
+                                                </td>
+                                            </tr>
+                                        ";
+                                    }
+
+                                    $fields[] = Placeholder::make("_batch_{$batchIdx}")
+                                        ->label('')
+                                        ->columnSpanFull()
+                                        ->content(new HtmlString("
+                                            <div style='
+                                                border:1.5px solid #fecaca;border-radius:10px;
+                                                overflow:hidden;margin-bottom:{$mb};
+                                            '>
+                                                <div style='
+                                                    background:linear-gradient(to right,#fef2f2,#fff5f5);
+                                                    border-bottom:1px solid #fecaca;
+                                                    padding:10px 14px;
+                                                    display:flex;align-items:center;justify-content:space-between;
+                                                '>
+                                                    <div>
+                                                        <div style='display:flex;align-items:center;gap:8px;'>
+                                                            <span style='
+                                                                background:#dc2626;color:#fff;
+                                                                font-size:10px;font-weight:800;
+                                                                padding:2px 10px;border-radius:999px;
+                                                            '>↩ Batch #{$batchIdx}</span>
+                                                            <span style='font-size:11px;color:#b91c1c;font-weight:600;'>
+                                                                {$batchDateStr}
+                                                            </span>
+                                                        </div>
+                                                        <div style='font-size:10px;color:#dc2626;margin-top:3px;'>
+                                                            By: <strong style='color:#7f1d1d;'>{$batchBy}</strong>
+                                                            &nbsp;·&nbsp; {$lineCount} line(s)
+                                                        </div>
+                                                    </div>
+                                                    <span style='
+                                                        background:#fff;border:1.5px solid #fca5a5;
+                                                        border-radius:10px;padding:6px 14px;
+                                                        font-size:16px;font-weight:900;color:#dc2626;
+                                                    '>{$batchTotal} pc(s)</span>
+                                                </div>
+                                                <table style='width:100%;border-collapse:collapse;'>
+                                                    <thead>
+                                                        <tr style='background:#1e3a5f;'>
+                                                            <th style='
+                                                                padding:7px 12px;text-align:left;
+                                                                font-size:10px;font-weight:700;
+                                                                color:#fff;text-transform:uppercase;
+                                                            '>Employee</th>
+                                                            <th style='
+                                                                padding:7px 12px;text-align:left;
+                                                                font-size:10px;font-weight:700;
+                                                                color:#93c5fd;text-transform:uppercase;
+                                                            '>Item</th>
+                                                            <th style='
+                                                                padding:7px 12px;text-align:center;
+                                                                font-size:10px;font-weight:700;
+                                                                color:#93c5fd;text-transform:uppercase;
+                                                                width:60px;
+                                                            '>Size</th>
+                                                            <th style='
+                                                                padding:7px 12px;text-align:center;
+                                                                font-size:10px;font-weight:700;
+                                                                color:#fca5a5;text-transform:uppercase;
+                                                                width:55px;
+                                                            '>Qty</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>{$rowsHtml}</tbody>
+                                                </table>
+                                            </div>
+                                        "));
+                                }
+
+                                return $fields;
+                            })
+                    ),
+                // ── End Returns column ────────────────────────────────────────
             ])
+
             ->filters([])
             ->recordActions([
 
@@ -851,7 +1315,6 @@ class UniformIssuancesTable
                                 $record->logSnapshot = null;
                             }
 
-                            // ── Auto-create transmittal when fully issued ──────
                             if ($allIssued) {
                                 $record->refresh();
                                 self::maybeCreateTransmittal($record);
@@ -862,10 +1325,385 @@ class UniformIssuancesTable
                                 ->success()->send();
                         }),
 
+
+                    Action::make('change_items')
+                        ->label('Change Items')
+                        ->color('warning')
+                        ->icon('heroicon-s-pencil-square')
+                        ->visible(fn ($record) =>
+                            $record->status === 'issued' &&
+                            self::userCan('update uniform-issuance')
+                        )
+                        ->modalHeading('Change Issued Item')
+                        ->modalSubmitActionLabel('Save Change')
+                        ->modalWidth('lg')
+                        ->form(function ($record): array {
+                            $record->loadMissing('recipients.items.item');
+
+                            $employeeOptions = $record->recipients
+                                ->mapWithKeys(fn ($r) => [$r->id => $r->employee_name])
+                                ->all();
+
+                            $itemsByRecipient = [];
+                            foreach ($record->recipients as $recipient) {
+                                foreach ($recipient->items as $issuanceItem) {
+                                    $released = (int) $issuanceItem->released_quantity;
+                                    if ($released <= 0) continue;
+                                    $name = $issuanceItem->item?->name ?? "Item #{$issuanceItem->item_id}";
+                                    $size = $issuanceItem->size ?: '—';
+                                    $itemsByRecipient[$recipient->id][$issuanceItem->id] =
+                                        "{$name} ({$size})  ·  issued: {$released}";
+                                }
+                            }
+
+                            $newItemOptions = ItemVariant::query()
+                                ->join('items', 'items.id', '=', 'item_variants.item_id')
+                                ->join('department_item', 'items.id', '=', 'department_item.item_id')
+                                ->where('department_item.department_id', \Filament\Facades\Filament::getTenant()->id)
+                                ->select('item_variants.item_id', 'item_variants.size_label', 'items.name', 'item_variants.quantity')
+                                ->orderBy('items.name')
+                                ->orderBy('item_variants.size_label')
+                                ->get()
+                                ->mapWithKeys(fn ($v) => [
+                                    "{$v->item_id}|{$v->size_label}" =>
+                                        "{$v->name} ({$v->size_label})  ·  stock: {$v->quantity}"
+                                ])
+                                ->all();
+
+                            return [
+
+                                \Filament\Forms\Components\Select::make('recipient_id')
+                                    ->label('Employee')
+                                    ->placeholder('Select employee...')
+                                    ->options($employeeOptions)
+                                    ->required()
+                                    ->live()
+                                    ->afterStateUpdated(function ($set) {
+                                        $set('issuance_item_id', null);
+                                        $set('change_qty', null);
+                                        $set('new_item_key', null);
+                                        $set('new_qty', null);
+                                    })
+                                    ->columnSpanFull(),
+
+                                \Filament\Forms\Components\Select::make('issuance_item_id')
+                                    ->label('Item to Change')
+                                    ->placeholder('Select item...')
+                                    ->options(function ($get) use ($itemsByRecipient): array {
+                                        $rid = $get('recipient_id');
+                                        return $rid ? ($itemsByRecipient[$rid] ?? []) : [];
+                                    })
+                                    ->required()
+                                    ->live()
+                                    ->afterStateUpdated(function ($set) {
+                                        $set('change_qty', null);
+                                        $set('new_item_key', null);
+                                        $set('new_qty', null);
+                                    })
+                                    ->visible(fn ($get) => (bool) $get('recipient_id'))
+                                    ->columnSpanFull(),
+
+                                Placeholder::make('_old_summary')
+                                    ->label('Current Item')
+                                    ->visible(fn ($get) => (bool) $get('issuance_item_id'))
+                                    ->content(function ($get) use ($record): HtmlString {
+                                        $iid = (int) $get('issuance_item_id');
+                                        if (! $iid) return new HtmlString('');
+
+                                        $issuanceItem = $record->recipients
+                                            ->flatMap(fn ($r) => $r->items)
+                                            ->firstWhere('id', $iid);
+                                        if (! $issuanceItem) return new HtmlString('');
+
+                                        $name     = e($issuanceItem->item?->name ?? "Item #{$issuanceItem->item_id}");
+                                        $size     = e($issuanceItem->size ?: '—');
+                                        $released = (int) $issuanceItem->released_quantity;
+                                        $variant  = ItemVariant::where('item_id', $issuanceItem->item_id)
+                                            ->where('size_label', $issuanceItem->size)->first();
+                                        $stock = (int) ($variant?->quantity ?? 0);
+
+                                        return new HtmlString("
+                                            <div style='
+                                                display:flex;align-items:center;justify-content:space-between;
+                                                padding:10px 12px;background:#fafafa;
+                                                border:1px solid #e5e7eb;border-radius:8px;font-size:12px;
+                                            '>
+                                                <div>
+                                                    <div style='font-weight:600;color:#111827;'>{$name}</div>
+                                                    <div style='color:#6b7280;margin-top:2px;'>Size: {$size}</div>
+                                                </div>
+                                                <div style='text-align:right;'>
+                                                    <div style='color:#6b7280;'>Issued: <strong style='color:#1d4ed8;'>{$released}</strong></div>
+                                                    <div style='color:#6b7280;margin-top:2px;'>In stock: <strong style='color:#374151;'>{$stock}</strong></div>
+                                                </div>
+                                            </div>
+                                        ");
+                                    })
+                                    ->columnSpanFull(),
+
+                                TextInput::make('change_qty')
+                                    ->label('How many pieces to change?')
+                                    ->numeric()
+                                    ->minValue(1)
+                                    ->required()
+                                    ->live(debounce: 300)
+                                    ->visible(fn ($get) => (bool) $get('issuance_item_id'))
+                                    ->suffix(function ($get) use ($record): string {
+                                        $iid = (int) $get('issuance_item_id');
+                                        if (! $iid) return '';
+                                        $issuanceItem = $record->recipients->flatMap(fn ($r) => $r->items)->firstWhere('id', $iid);
+                                        $released = (int) ($issuanceItem?->released_quantity ?? 0);
+                                        return "/ {$released} issued";
+                                    })
+                                    ->helperText('Enter the number of pieces you want to swap to a different item.')
+                                    ->afterStateUpdated(function ($set) {
+                                        $set('new_item_key', null);
+                                        $set('new_qty', null);
+                                    })
+                                    ->columnSpanFull(),
+
+                                Placeholder::make('_arrow')
+                                    ->label('')
+                                    ->visible(fn ($get) => (bool) $get('issuance_item_id') && (bool) $get('change_qty'))
+                                    ->content(new HtmlString(
+                                        "<div style='text-align:center;color:#9ca3af;font-size:18px;margin:2px 0;'>↓ Replace with</div>"
+                                    ))
+                                    ->columnSpanFull(),
+
+                                \Filament\Forms\Components\Select::make('new_item_key')
+                                    ->label('Replace With')
+                                    ->placeholder('Search for new item...')
+                                    ->options($newItemOptions)
+                                    ->searchable()
+                                    ->required()
+                                    ->live()
+                                    ->afterStateUpdated(fn ($set) => $set('new_qty', null))
+                                    ->visible(fn ($get) => (bool) $get('issuance_item_id') && (bool) $get('change_qty'))
+                                    ->columnSpanFull(),
+
+                                TextInput::make('new_qty')
+                                    ->label('Quantity for New Item')
+                                    ->numeric()
+                                    ->minValue(1)
+                                    ->required()
+                                    ->visible(fn ($get) => (bool) $get('new_item_key') && (bool) $get('issuance_item_id') && (bool) $get('change_qty'))
+                                    ->default(fn ($get) => $get('change_qty'))
+                                    ->suffix(function ($get) use ($record): string {
+                                        $iid        = (int) $get('issuance_item_id');
+                                        $newItemKey = $get('new_item_key');
+                                        $changeQty  = (int) $get('change_qty');
+                                        if (! $iid || ! $newItemKey) return '';
+
+                                        $issuanceItem = $record->recipients
+                                            ->flatMap(fn ($r) => $r->items)
+                                            ->firstWhere('id', $iid);
+
+                                        [$newItemId, $newSize] = array_pad(explode('|', $newItemKey, 2), 2, null);
+                                        $newItemId  = (int) $newItemId;
+                                        $isSameItem = (
+                                            $issuanceItem &&
+                                            $newItemId === (int) $issuanceItem->item_id &&
+                                            $newSize   === $issuanceItem->size
+                                        );
+
+                                        if ($isSameItem) {
+                                            $variant = ItemVariant::where('item_id', $newItemId)->where('size_label', $newSize)->first();
+                                            $max     = (int) ($variant?->quantity ?? 0) + $changeQty;
+                                            return "/ {$max} max";
+                                        }
+
+                                        $variant = ItemVariant::where('item_id', $newItemId)->where('size_label', $newSize)->first();
+                                        return '/ ' . (int) ($variant?->quantity ?? 0) . ' in stock';
+                                    })
+                                    ->helperText(function ($get) use ($record): string {
+                                        $iid        = (int) $get('issuance_item_id');
+                                        $newItemKey = $get('new_item_key');
+                                        $changeQty  = (int) $get('change_qty');
+                                        if (! $iid || ! $newItemKey) return '';
+
+                                        $issuanceItem = $record->recipients->flatMap(fn ($r) => $r->items)->firstWhere('id', $iid);
+                                        if (! $issuanceItem) return '';
+
+                                        [$newItemId, $newSize] = array_pad(explode('|', $newItemKey, 2), 2, null);
+                                        $isSame = ((int) $newItemId === (int) $issuanceItem->item_id && $newSize === $issuanceItem->size);
+
+                                        $released  = (int) $issuanceItem->released_quantity;
+                                        $remaining = $released - $changeQty;
+
+                                        return $isSame
+                                            ? "Changing quantity only. Currently issued: {$released}. After change: " . ($released - $changeQty + (int) $get('new_qty')) . " issued."
+                                            : "Old item: {$changeQty} pc(s) will be restored to stock. Remaining on old item: {$remaining} pc(s) stay issued.";
+                                    })
+                                    ->columnSpanFull(),
+                            ];
+                        })
+                        ->action(function ($record, array $data) {
+                            $record->loadMissing('recipients.items.item', 'transmittal');
+
+                            $recipientId    = $data['recipient_id'] ?? null;
+                            $issuanceItemId = (int) ($data['issuance_item_id'] ?? 0);
+                            $newItemKey     = $data['new_item_key'] ?? null;
+                            $newQty         = (int) ($data['new_qty'] ?? 0);
+                            $changeQty      = (int) ($data['change_qty'] ?? 0);
+                            $performer      = auth()->user()?->name ?? 'System';
+
+                            if (! $recipientId || ! $issuanceItemId || ! $newItemKey || $newQty <= 0 || $changeQty <= 0) {
+                                Notification::make()->title('Invalid input.')->warning()->send();
+                                return;
+                            }
+
+                            $issuanceItem = $record->recipients->flatMap(fn ($r) => $r->items)->firstWhere('id', $issuanceItemId);
+                            $recipient    = $record->recipients->firstWhere('id', $recipientId);
+
+                            if (! $issuanceItem || ! $recipient) {
+                                Notification::make()->title('Item not found.')->danger()->send();
+                                return;
+                            }
+
+                            $currentReleased = (int) $issuanceItem->released_quantity;
+
+                            if ($changeQty > $currentReleased) {
+                                Notification::make()
+                                    ->title("Cannot change {$changeQty} — only {$currentReleased} were issued.")
+                                    ->danger()->send();
+                                return;
+                            }
+
+                            [$newItemId, $newSize] = array_pad(explode('|', $newItemKey, 2), 2, null);
+                            $newItemId = (int) $newItemId;
+
+                            $oldItemId   = (int) $issuanceItem->item_id;
+                            $oldSize     = $issuanceItem->size;
+                            $oldItemName = $issuanceItem->item?->name ?? "Item #{$oldItemId}";
+                            $isSameItem  = ($newItemId === $oldItemId && $newSize === $oldSize);
+
+                            \App\Models\UniformIssuanceItem::$skipStockEvents = true;
+
+                            if ($isSameItem) {
+                                $newItemName  = $oldItemName;
+                                $newReleased  = $currentReleased - $changeQty + $newQty;
+                                $stockDiff    = $newQty - $changeQty;
+
+                                $maxAllowed = $currentReleased + (ItemVariant::where('item_id', $newItemId)->where('size_label', $newSize)->value('quantity') ?? 0);
+                                if ($newReleased > $maxAllowed) {
+                                    Notification::make()
+                                        ->title("Insufficient stock — max {$maxAllowed} available.")
+                                        ->danger()->send();
+                                    \App\Models\UniformIssuanceItem::$skipStockEvents = false;
+                                    return;
+                                }
+
+                                $variant = ItemVariant::where('item_id', $newItemId)->where('size_label', $newSize)->first();
+                                if ($variant && $stockDiff !== 0) {
+                                    $stockDiff > 0
+                                        ? $variant->decrement('quantity', $stockDiff)
+                                        : $variant->increment('quantity', abs($stockDiff));
+                                }
+
+                                $issuanceItem->update([
+                                    'released_quantity'  => $newReleased,
+                                    'remaining_quantity' => max(0, $issuanceItem->quantity - $newReleased),
+                                ]);
+
+                            } else {
+                                $newItemName = \App\Models\Item::find($newItemId)?->name ?? "Item #{$newItemId}";
+
+                                $newVariant = ItemVariant::where('item_id', $newItemId)->where('size_label', $newSize)->first();
+                                $newStock   = (int) ($newVariant?->quantity ?? 0);
+                                if ($newQty > $newStock) {
+                                    Notification::make()
+                                        ->title("Insufficient stock — {$newItemName} ({$newSize}) only has {$newStock}.")
+                                        ->danger()->send();
+                                    \App\Models\UniformIssuanceItem::$skipStockEvents = false;
+                                    return;
+                                }
+
+                                $oldVariant = ItemVariant::where('item_id', $oldItemId)->where('size_label', $oldSize)->first();
+                                if ($oldVariant && $changeQty > 0) {
+                                    $oldVariant->increment('quantity', $changeQty);
+                                }
+
+                                if ($newVariant && $newQty > 0) {
+                                    $newVariant->decrement('quantity', $newQty);
+                                }
+
+                                $remainingOnOld = $currentReleased - $changeQty;
+
+                                if ($remainingOnOld <= 0) {
+                                    $issuanceItem->update([
+                                        'item_id'            => $newItemId,
+                                        'size'               => $newSize,
+                                        'quantity'           => $newQty,
+                                        'released_quantity'  => $newQty,
+                                        'remaining_quantity' => 0,
+                                    ]);
+                                } else {
+                                    $issuanceItem->update([
+                                        'released_quantity'  => $remainingOnOld,
+                                        'remaining_quantity' => max(0, $issuanceItem->remaining_quantity),
+                                    ]);
+
+                                    $existingNew = $recipient->items
+                                        ->where('item_id', $newItemId)
+                                        ->where('size', $newSize)
+                                        ->first();
+
+                                    if ($existingNew) {
+                                        $existingNew->update([
+                                            'quantity'           => $existingNew->quantity + $newQty,
+                                            'released_quantity'  => $existingNew->released_quantity + $newQty,
+                                            'remaining_quantity' => max(0, $existingNew->remaining_quantity),
+                                        ]);
+                                    } else {
+                                        \App\Models\UniformIssuanceItem::create([
+                                            'uniform_issuance_recipient_id' => $recipient->id,
+                                            'item_id'            => $newItemId,
+                                            'size'               => $newSize,
+                                            'quantity'           => $newQty,
+                                            'released_quantity'  => $newQty,
+                                            'remaining_quantity' => 0,
+                                        ]);
+                                    }
+                                }
+                            }
+
+                            \App\Models\UniformIssuanceItem::$skipStockEvents = false;
+
+                            $fromLabel = "{$oldItemName} ({$oldSize}) × {$changeQty}";
+                            $toLabel   = $isSameItem
+                                ? "{$oldItemName} ({$oldSize}) × {$newQty} (qty adjusted)"
+                                : "{$newItemName} ({$newSize}) × {$newQty}" . ($changeQty < $currentReleased ? " [partial — {$changeQty} of {$currentReleased} swapped]" : '');
+
+                            UniformIssuanceLog::create([
+                                'uniform_issuance_id' => $record->id,
+                                'action'              => 'item_changed',
+                                'performed_by'        => $performer,
+                                'note'                => json_encode([[
+                                    'label'    => $recipient->employee_name,
+                                    'released' => $newQty,
+                                    'remaining'=> 0,
+                                    'ordered'  => $changeQty,
+                                    '_from'    => $fromLabel,
+                                    '_to'      => $toLabel,
+                                ]]),
+                            ]);
+
+                            if ($record->transmittal_id) {
+                                $record->refresh();
+                                $record->loadMissing('transmittal', 'recipients.items.item');
+                                $record->transmittal?->updateQuietly([
+                                    'items_summary' => Transmittal::buildSummaryFromIssuance($record),
+                                ]);
+                            }
+
+                            Notification::make()
+                                ->title('Item updated. Stock adjusted.')
+                                ->body("Changed: {$fromLabel}  →  {$toLabel}")
+                                ->success()
+                                ->send();
+                        }),
+
                     // ── RETURN ────────────────────────────────────────────────
-                    // Returns do NOT change the issuance status.
-                    // Items returned are saved to uniform_issuance_return_items.
-                    // Multiple returns allowed — one employee + item per submission.
                     Action::make('return')
                         ->label('Return Items')
                         ->color('warning')
@@ -880,7 +1718,6 @@ class UniformIssuancesTable
                         ->form(function ($record): array {
                             $record->loadMissing('recipients.items.item', 'recipients.returnItems');
 
-                            // ── Pre-compute returnable data keyed by recipient id ──────
                             $returnableData = [];
                             foreach ($record->recipients as $recipient) {
                                 $alreadyMap = [];
@@ -918,7 +1755,6 @@ class UniformIssuancesTable
                                 ];
                             }
 
-                            // ── Employee options ──────────────────────────────────────
                             $employeeOptions = collect($returnableData)
                                 ->mapWithKeys(fn ($v, $k) => [$k => $v['name']])
                                 ->all();
@@ -939,8 +1775,6 @@ class UniformIssuancesTable
                             }
 
                             return [
-
-                                // ── Header banner ─────────────────────────────────────
                                 Placeholder::make('_return_header')
                                     ->label('')
                                     ->columnSpanFull()
@@ -964,308 +1798,139 @@ class UniformIssuancesTable
                                                 <div style='font-size:11px;color:#fde68a;margin-top:2px;line-height:1.5;'>
                                                     Select an employee → choose an item → enter quantity.
                                                     The issuance <strong style='color:#fff;'>status will not change.</strong>
-                                                    You can return items multiple times.
                                                 </div>
                                             </div>
                                         </div>
                                     ")),
 
-                                // ── Hidden data carrier ───────────────────────────────
                                 \Filament\Forms\Components\Hidden::make('_returnable_data')
                                     ->default(json_encode($returnableData)),
 
-                                // ── Stock restore toggle ──────────────────────────────
                                 Toggle::make('restore_stock')
                                     ->label('Restore returned item back to stock?')
                                     ->default(true)
                                     ->helperText('Turn on to add the returned quantity back to inventory.')
                                     ->columnSpanFull(),
 
-                                        // ── STEP 1: Choose employee ───────────────────
-                                        \Filament\Forms\Components\Select::make('recipient_id')
-                                            ->label('① Choose Employee')
-                                            ->placeholder('Select an employee...')
-                                            ->options($employeeOptions)
-                                            ->required()
-                                            ->live()
-                                            ->afterStateUpdated(function ($set) {
-                                                $set('issuance_item_id', null);
-                                                $set('return_qty', null);
-                                            })
-                                            ->columnSpanFull(),
+                                \Filament\Forms\Components\Select::make('recipient_id')
+                                    ->label('① Choose Employee')
+                                    ->placeholder('Select an employee...')
+                                    ->options($employeeOptions)
+                                    ->required()
+                                    ->live()
+                                    ->afterStateUpdated(function ($set) {
+                                        $set('issuance_item_id', null);
+                                        $set('return_qty', null);
+                                    })
+                                    ->columnSpanFull(),
 
-                                        // ── Employee summary card ─────────────────────
-                                        Placeholder::make('_employee_summary')
-                                            ->label('')
-                                            ->columnSpanFull()
-                                            ->content(function ($get) use ($returnableData): HtmlString {
-                                                $rid = $get('recipient_id');
-                                                if (! $rid || ! isset($returnableData[$rid])) return new HtmlString('');
+                                Placeholder::make('_employee_summary')
+                                    ->label('')
+                                    ->columnSpanFull()
+                                    ->content(function ($get) use ($returnableData): HtmlString {
+                                        $rid = $get('recipient_id');
+                                        if (! $rid || ! isset($returnableData[$rid])) return new HtmlString('');
 
-                                                $emp   = $returnableData[$rid];
-                                                $name  = e($emp['name']);
-                                                $count = count($emp['items']);
+                                        $emp   = $returnableData[$rid];
+                                        $name  = e($emp['name']);
+                                        $count = count($emp['items']);
 
-                                                $chips = implode('', array_map(function ($item) {
-                                                    $n = e($item['item_name']);
-                                                    $s = e($item['size']);
-                                                    $r = $item['returnable'];
-                                                    return "
-                                                        <span style='
-                                                            display:inline-flex;align-items:center;gap:5px;
-                                                            background:#fff7ed;border:1px solid #fed7aa;
-                                                            border-radius:999px;padding:3px 10px 3px 8px;
-                                                            font-size:11px;color:#92400e;font-weight:600;margin:2px;
-                                                        '>
-                                                            <span style='
-                                                                background:#ea580c;color:#fff;border-radius:999px;
-                                                                padding:1px 7px;font-size:10px;font-weight:800;
-                                                            '>{$r}</span>
-                                                            {$n} · {$s}
-                                                        </span>
-                                                    ";
-                                                }, $emp['items']));
+                                        $chips = implode('', array_map(function ($item) {
+                                            $n = e($item['item_name']);
+                                            $s = e($item['size']);
+                                            $r = $item['returnable'];
+                                            return "
+                                                <span style='
+                                                    display:inline-flex;align-items:center;gap:5px;
+                                                    background:#fff7ed;border:1px solid #fed7aa;
+                                                    border-radius:999px;padding:3px 10px 3px 8px;
+                                                    font-size:11px;color:#92400e;font-weight:600;margin:2px;
+                                                '>
+                                                    <span style='
+                                                        background:#ea580c;color:#fff;border-radius:999px;
+                                                        padding:1px 7px;font-size:10px;font-weight:800;
+                                                    '>{$r}</span>
+                                                    {$n} · {$s}
+                                                </span>
+                                            ";
+                                        }, $emp['items']));
 
-                                                return new HtmlString("
+                                        return new HtmlString("
+                                            <div style='
+                                                background:#fff;border:1px solid #fde68a;
+                                                border-radius:10px;padding:12px 14px;
+                                                border-left:4px solid #f59e0b;
+                                            '>
+                                                <div style='display:flex;align-items:center;gap:10px;margin-bottom:10px;'>
                                                     <div style='
-                                                        background:#fff;border:1px solid #fde68a;
-                                                        border-radius:10px;padding:12px 14px;
-                                                        border-left:4px solid #f59e0b;
+                                                        width:34px;height:34px;background:linear-gradient(135deg,#f59e0b,#d97706);
+                                                        border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0;
                                                     '>
-                                                        <div style='display:flex;align-items:center;gap:10px;margin-bottom:10px;'>
-                                                            <div style='
-                                                                width:34px;height:34px;background:linear-gradient(135deg,#f59e0b,#d97706);
-                                                                border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0;
-                                                            '>
-                                                                <svg width='16' height='16' fill='none' stroke='#fff' stroke-width='2' viewBox='0 0 24 24'>
-                                                                    <path stroke-linecap='round' stroke-linejoin='round' d='M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z'/>
-                                                                </svg>
-                                                            </div>
-                                                            <div>
-                                                                <div style='font-size:13px;font-weight:700;color:#111827;'>{$name}</div>
-                                                                <div style='font-size:11px;color:#78350f;margin-top:1px;'>
-                                                                    {$count} item type(s) available to return
-                                                                </div>
-                                                            </div>
-                                                        </div>
-                                                        <div style='display:flex;flex-wrap:wrap;gap:2px;'>{$chips}</div>
+                                                        <svg width='16' height='16' fill='none' stroke='#fff' stroke-width='2' viewBox='0 0 24 24'>
+                                                            <path stroke-linecap='round' stroke-linejoin='round' d='M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z'/>
+                                                        </svg>
                                                     </div>
-                                                ");
-                                            }),
-
-                                        // ── STEP 2: Choose item ───────────────────────
-                                        \Filament\Forms\Components\Select::make('issuance_item_id')
-                                            ->label('② Choose Item')
-                                            ->placeholder('Select an item...')
-                                            ->options(function ($get) use ($returnableData): array {
-                                                $rid = $get('recipient_id');
-                                                if (! $rid || ! isset($returnableData[$rid])) return [];
-
-                                                return collect($returnableData[$rid]['items'])
-                                                    ->mapWithKeys(fn ($item) => [
-                                                        $item['id'] => "{$item['item_name']} — {$item['size']}  (max returnable: {$item['returnable']})"
-                                                    ])
-                                                    ->all();
-                                            })
-                                            ->required()
-                                            ->live()
-                                            ->afterStateUpdated(fn ($set) => $set('return_qty', null))
-                                            ->visible(fn ($get) => (bool) $get('recipient_id'))
-                                            ->columnSpanFull(),
-
-                                        // ── Item detail card ──────────────────────────
-                                        Placeholder::make('_item_detail')
-                                            ->label('')
-                                            ->columnSpanFull()
-                                            ->visible(fn ($get) => (bool) $get('issuance_item_id') && (bool) $get('recipient_id'))
-                                            ->content(function ($get) use ($returnableData): HtmlString {
-                                                $rid            = $get('recipient_id');
-                                                $issuanceItemId = (int) $get('issuance_item_id');
-
-                                                if (! $rid || ! $issuanceItemId || ! isset($returnableData[$rid])) return new HtmlString('');
-
-                                                $itemData = collect($returnableData[$rid]['items'])->firstWhere('id', $issuanceItemId);
-                                                if (! $itemData) return new HtmlString('');
-
-                                                $name        = e($itemData['item_name']);
-                                                $size        = e($itemData['size']);
-                                                $released    = $itemData['released'];
-                                                $alreadyBack = $itemData['already_back'];
-                                                $returnable  = $itemData['returnable'];
-                                                $returnedPct = $released > 0 ? round(($alreadyBack / $released) * 100) : 0;
-
-                                                $prevReturnBadge = $alreadyBack > 0
-                                                    ? "<div style='
-                                                            display:flex;align-items:center;gap:8px;
-                                                            background:#fef2f2;border:1px solid #fecaca;
-                                                            border-radius:8px;padding:8px 12px;margin-top:10px;
-                                                        '>
-                                                            <svg width='15' height='15' fill='none' stroke='#dc2626' stroke-width='2' viewBox='0 0 24 24'>
-                                                                <path stroke-linecap='round' stroke-linejoin='round' d='M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z'/>
-                                                            </svg>
-                                                            <span style='font-size:12px;color:#b91c1c;font-weight:600;'>
-                                                                {$alreadyBack} pc(s) were previously returned — only {$returnable} remain returnable.
-                                                            </span>
-                                                        </div>"
-                                                    : '';
-
-                                                return new HtmlString("
-                                                    <div style='background:#fff;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;'>
-                                                        <!-- Header -->
-                                                        <div style='
-                                                            background:linear-gradient(to right,#f0f4ff,#eff6ff);
-                                                            border-bottom:1px solid #e2e8f0;
-                                                            padding:10px 14px;
-                                                            display:flex;align-items:center;gap:10px;
-                                                        '>
-                                                            <div style='
-                                                                width:34px;height:34px;background:#6366f1;border-radius:8px;
-                                                                display:flex;align-items:center;justify-content:center;flex-shrink:0;
-                                                            '>
-                                                                <svg width='17' height='17' fill='none' stroke='#fff' stroke-width='2' viewBox='0 0 24 24'>
-                                                                    <path stroke-linecap='round' stroke-linejoin='round' d='M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4'/>
-                                                                </svg>
-                                                            </div>
-                                                            <div>
-                                                                <div style='font-size:13px;font-weight:700;color:#111827;'>{$name}</div>
-                                                                <div style='font-size:11px;color:#6b7280;'>
-                                                                    Size: <strong style='color:#374151;'>{$size}</strong>
-                                                                </div>
-                                                            </div>
-                                                        </div>
-                                                        <!-- Stats -->
-                                                        <div style='display:grid;grid-template-columns:repeat(3,1fr);'>
-                                                            <div style='padding:12px 16px;text-align:center;border-right:1px solid #f1f5f9;'>
-                                                                <div style='font-size:24px;font-weight:900;color:#1d4ed8;line-height:1;'>{$released}</div>
-                                                                <div style='font-size:10px;color:#9ca3af;text-transform:uppercase;letter-spacing:.05em;margin-top:4px;'>Issued</div>
-                                                            </div>
-                                                            <div style='padding:12px 16px;text-align:center;border-right:1px solid #f1f5f9;'>
-                                                                <div style='font-size:24px;font-weight:900;color:#dc2626;line-height:1;'>{$alreadyBack}</div>
-                                                                <div style='font-size:10px;color:#9ca3af;text-transform:uppercase;letter-spacing:.05em;margin-top:4px;'>Returned</div>
-                                                            </div>
-                                                            <div style='padding:12px 16px;text-align:center;'>
-                                                                <div style='font-size:24px;font-weight:900;color:#059669;line-height:1;'>{$returnable}</div>
-                                                                <div style='font-size:10px;color:#9ca3af;text-transform:uppercase;letter-spacing:.05em;margin-top:4px;'>Returnable</div>
-                                                            </div>
-                                                        </div>
-                                                        <!-- Progress bar -->
-                                                        <div style='padding:10px 16px 12px;border-top:1px solid #f1f5f9;background:#f9fafb;'>
-                                                            <div style='display:flex;justify-content:space-between;margin-bottom:5px;'>
-                                                                <span style='font-size:11px;color:#6b7280;'>Return progress</span>
-                                                                <span style='font-size:11px;color:#374151;font-weight:700;'>{$alreadyBack} / {$released} returned ({$returnedPct}%)</span>
-                                                            </div>
-                                                            <div style='height:7px;background:#e5e7eb;border-radius:999px;overflow:hidden;'>
-                                                                <div style='height:100%;width:{$returnedPct}%;background:linear-gradient(to right,#dc2626,#f87171);border-radius:999px;'></div>
-                                                            </div>
-                                                            {$prevReturnBadge}
+                                                    <div>
+                                                        <div style='font-size:13px;font-weight:700;color:#111827;'>{$name}</div>
+                                                        <div style='font-size:11px;color:#78350f;margin-top:1px;'>
+                                                            {$count} item type(s) available to return
                                                         </div>
                                                     </div>
-                                                ");
-                                            }),
+                                                </div>
+                                                <div style='display:flex;flex-wrap:wrap;gap:2px;'>{$chips}</div>
+                                            </div>
+                                        ");
+                                    }),
 
-                                        // ── STEP 3: Quantity ──────────────────────────
-                                        \Filament\Forms\Components\TextInput::make('return_qty')
-                                            ->label('③ Quantity to Return')
-                                            ->placeholder('Enter quantity...')
-                                            ->numeric()
-                                            ->minValue(1)
-                                            ->default(null)
-                                            ->required()
-                                            ->live(debounce: 300)
-                                            ->visible(fn ($get) => (bool) $get('issuance_item_id') && (bool) $get('recipient_id'))
-                                            ->suffix(function ($get) use ($returnableData): string {
+                                \Filament\Forms\Components\Select::make('issuance_item_id')
+                                    ->label('② Choose Item')
+                                    ->placeholder('Select an item...')
+                                    ->options(function ($get) use ($returnableData): array {
+                                        $rid = $get('recipient_id');
+                                        if (! $rid || ! isset($returnableData[$rid])) return [];
+
+                                        return collect($returnableData[$rid]['items'])
+                                            ->mapWithKeys(fn ($item) => [
+                                                $item['id'] => "{$item['item_name']} — {$item['size']}  (max returnable: {$item['returnable']})"
+                                            ])
+                                            ->all();
+                                    })
+                                    ->required()
+                                    ->live()
+                                    ->afterStateUpdated(fn ($set) => $set('return_qty', null))
+                                    ->visible(fn ($get) => (bool) $get('recipient_id'))
+                                    ->columnSpanFull(),
+
+                                \Filament\Forms\Components\TextInput::make('return_qty')
+                                    ->label('③ Quantity to Return')
+                                    ->placeholder('Enter quantity...')
+                                    ->numeric()
+                                    ->minValue(1)
+                                    ->default(null)
+                                    ->required()
+                                    ->live(debounce: 300)
+                                    ->visible(fn ($get) => (bool) $get('issuance_item_id') && (bool) $get('recipient_id'))
+                                    ->suffix(function ($get) use ($returnableData): string {
+                                        $rid = $get('recipient_id');
+                                        $iid = (int) $get('issuance_item_id');
+                                        if (! $rid || ! $iid || ! isset($returnableData[$rid])) return '';
+                                        $item = collect($returnableData[$rid]['items'])->firstWhere('id', $iid);
+                                        return $item ? "/ {$item['returnable']} max" : '';
+                                    })
+                                    ->rules([
+                                        function ($get) use ($returnableData) {
+                                            return function (string $attr, $value, \Closure $fail) use ($get, $returnableData) {
                                                 $rid = $get('recipient_id');
                                                 $iid = (int) $get('issuance_item_id');
-                                                if (! $rid || ! $iid || ! isset($returnableData[$rid])) return '';
+                                                if (! $rid || ! $iid || ! isset($returnableData[$rid])) return;
                                                 $item = collect($returnableData[$rid]['items'])->firstWhere('id', $iid);
-                                                return $item ? "/ {$item['returnable']} max" : '';
-                                            })
-                                            ->rules([
-                                                function ($get) use ($returnableData) {
-                                                    return function (string $attr, $value, \Closure $fail) use ($get, $returnableData) {
-                                                        $rid = $get('recipient_id');
-                                                        $iid = (int) $get('issuance_item_id');
-                                                        if (! $rid || ! $iid || ! isset($returnableData[$rid])) return;
-                                                        $item = collect($returnableData[$rid]['items'])->firstWhere('id', $iid);
-                                                        if ($item && (int) $value > $item['returnable']) {
-                                                            $fail("Cannot return more than {$item['returnable']} pc(s).");
-                                                        }
-                                                    };
-                                                },
-                                            ])
-                                            ->columnSpanFull(),
-
-                                        // ── Live summary chip ─────────────────────────
-                                        Placeholder::make('_qty_preview')
-                                            ->label('')
-                                            ->columnSpanFull()
-                                            ->visible(fn ($get) => (bool) $get('issuance_item_id') && (bool) $get('recipient_id'))
-                                            ->content(function ($get) use ($returnableData): HtmlString {
-                                                $rid  = $get('recipient_id');
-                                                $iid  = (int) $get('issuance_item_id');
-                                                $qty  = (int) ($get('return_qty') ?? 0);
-                                                $restore = $get('restore_stock');
-
-                                                if (! $rid || ! $iid || ! isset($returnableData[$rid])) return new HtmlString('');
-
-                                                $itemData = collect($returnableData[$rid]['items'])->firstWhere('id', $iid);
-                                                if (! $itemData) return new HtmlString('');
-
-                                                if ($qty <= 0) {
-                                                    return new HtmlString("
-                                                        <div style='
-                                                            display:inline-flex;align-items:center;gap:6px;
-                                                            background:#f9fafb;border:1px dashed #e5e7eb;
-                                                            border-radius:8px;padding:8px 14px;
-                                                            font-size:12px;color:#9ca3af;
-                                                        '>
-                                                            ← Enter a quantity to preview
-                                                        </div>
-                                                    ");
+                                                if ($item && (int) $value > $item['returnable']) {
+                                                    $fail("Cannot return more than {$item['returnable']} pc(s).");
                                                 }
-
-                                                $isOver = $qty > $itemData['returnable'];
-
-                                                if ($isOver) {
-                                                    return new HtmlString("
-                                                        <div style='
-                                                            display:inline-flex;align-items:center;gap:8px;
-                                                            background:#fef2f2;border:1px solid #fecaca;
-                                                            border-radius:8px;padding:9px 14px;
-                                                            font-size:12px;font-weight:600;color:#dc2626;
-                                                        '>
-                                                            <svg width='15' height='15' fill='none' stroke='currentColor' stroke-width='2' viewBox='0 0 24 24'>
-                                                                <circle cx='12' cy='12' r='10'/><line x1='15' y1='9' x2='9' y2='15'/><line x1='9' y1='9' x2='15' y2='15'/>
-                                                            </svg>
-                                                            Too many — max is {$itemData['returnable']} pc(s)
-                                                        </div>
-                                                    ");
-                                                }
-
-                                                $empName  = e($returnableData[$rid]['name']);
-                                                $itemName = e($itemData['item_name']);
-                                                $size     = e($itemData['size']);
-                                                $stockMsg = $restore
-                                                    ? "<span style='background:#ecfdf5;border:1px solid #a7f3d0;border-radius:999px;padding:1px 8px;font-size:10px;color:#059669;font-weight:700;'>+ stock restored</span>"
-                                                    : "<span style='background:#fff7ed;border:1px solid #fed7aa;border-radius:999px;padding:1px 8px;font-size:10px;color:#d97706;font-weight:700;'>stock not restored</span>";
-
-                                                return new HtmlString("
-                                                    <div style='
-                                                        background:#ecfdf5;border:1px solid #a7f3d0;
-                                                        border-radius:8px;padding:9px 14px;
-                                                        display:flex;align-items:center;gap:8px;flex-wrap:wrap;
-                                                    '>
-                                                        <svg width='15' height='15' fill='none' stroke='#059669' stroke-width='2' viewBox='0 0 24 24'>
-                                                            <path stroke-linecap='round' stroke-linejoin='round' d='M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z'/>
-                                                        </svg>
-                                                        <span style='font-size:12px;font-weight:700;color:#065f46;'>
-                                                            {$qty} × {$itemName} ({$size}) from <em>{$empName}</em>
-                                                        </span>
-                                                        {$stockMsg}
-                                                    </div>
-                                                ");
-                                            }),
-
+                                            };
+                                        },
+                                    ])
+                                    ->columnSpanFull(),
                             ];
                         })
                         ->action(function ($record, array $data) {
@@ -1294,7 +1959,6 @@ class UniformIssuancesTable
                                 return;
                             }
 
-                            // Server-side guard: recompute max returnable
                             $alreadyReturned = $recipient->returnItems
                                 ->where('item_id', $issuanceItem->item_id)
                                 ->where('size', $issuanceItem->size)
@@ -1310,7 +1974,6 @@ class UniformIssuancesTable
                                 return;
                             }
 
-                            // Save the return record
                             UniformIssuanceReturnItem::create([
                                 'uniform_issuance_recipient_id' => $recipient->id,
                                 'item_id'     => $issuanceItem->item_id,
@@ -1319,7 +1982,6 @@ class UniformIssuancesTable
                                 'returned_by' => $performer,
                             ]);
 
-                            // Optionally restore stock
                             if ($restoreStock) {
                                 ItemVariant::where('item_id', $issuanceItem->item_id)
                                     ->where('size_label', $issuanceItem->size)
@@ -1335,7 +1997,6 @@ class UniformIssuancesTable
                                 'action'   => 'returned',
                             ]];
 
-                            // Log without changing status
                             UniformIssuanceLog::create([
                                 'uniform_issuance_id' => $record->id,
                                 'action'              => 'return_items',
@@ -1343,7 +2004,6 @@ class UniformIssuancesTable
                                 'note'                => json_encode($itemSnapshot),
                             ]);
 
-                            // ── Append to issuance note tracker ──────────────────
                             $record->appendReturnNote([
                                 [
                                     'employee' => $recipient->employee_name,
@@ -1360,8 +2020,6 @@ class UniformIssuancesTable
                         }),
 
                     // ── RETURN ALL ───────────────────────────────────────────
-                    // Returns ALL remaining returnable items across all employees
-                    // in a single action. Status does NOT change.
                     Action::make('return_all')
                         ->label('Return All')
                         ->color('danger')
@@ -1376,8 +2034,7 @@ class UniformIssuancesTable
                         ->form(function ($record): array {
                             $record->loadMissing('recipients.items.item', 'recipients.returnItems');
 
-                            // Build summary of what will be returned
-                            $returnableData = [];
+                            $returnableData  = [];
                             $totalReturnable = 0;
 
                             foreach ($record->recipients as $recipient) {
@@ -1415,14 +2072,14 @@ class UniformIssuancesTable
                                             <div style='text-align:center;padding:32px;background:#f9fafb;border:1px dashed #e5e7eb;border-radius:12px;'>
                                                 <div style='font-size:32px;margin-bottom:8px;'>✅</div>
                                                 <div style='font-size:14px;font-weight:700;color:#374151;'>Nothing left to return</div>
-                                                <div style='font-size:12px;color:#9ca3af;margin-top:4px;'>All items have already been fully returned.</div>
                                             </div>
                                         ")),
                                 ];
                             }
 
-                            // Build item rows HTML
-                            $rows = '';
+                            $rows      = '';
+                            $lineCount = count($returnableData);
+
                             foreach ($returnableData as $i => $row) {
                                 $bg  = $i % 2 === 0 ? '#ffffff' : '#fafafa';
                                 $emp = e($row['employee']);
@@ -1431,60 +2088,25 @@ class UniformIssuancesTable
                                 $qty = $row['qty'];
                                 $rows .= "
                                     <tr style='background:{$bg};'>
-                                        <td style='padding:8px 12px;font-size:12px;color:#111827;font-weight:500;border-bottom:1px solid #f1f5f9;'>
-                                            <div style='display:flex;align-items:center;gap:6px;'>
-                                                <div style='width:6px;height:6px;border-radius:50%;background:#ea580c;flex-shrink:0;'></div>
-                                                {$emp}
-                                            </div>
-                                        </td>
+                                        <td style='padding:8px 12px;font-size:12px;color:#111827;font-weight:500;border-bottom:1px solid #f1f5f9;'><div style='display:flex;align-items:center;gap:6px;'><div style='width:6px;height:6px;border-radius:50%;background:#ea580c;flex-shrink:0;'></div>{$emp}</div></td>
                                         <td style='padding:8px 12px;font-size:12px;color:#374151;border-bottom:1px solid #f1f5f9;'>{$itm}</td>
-                                        <td style='padding:8px 12px;text-align:center;border-bottom:1px solid #f1f5f9;'>
-                                            <span style='background:#f1f5f9;border:1px solid #e2e8f0;border-radius:999px;padding:1px 8px;font-size:11px;color:#374151;'>{$sz}</span>
-                                        </td>
-                                        <td style='padding:8px 12px;text-align:center;border-bottom:1px solid #f1f5f9;'>
-                                            <span style='background:#fef2f2;border:1px solid #fecaca;border-radius:999px;padding:1px 10px;font-size:12px;font-weight:800;color:#dc2626;'>{$qty}</span>
-                                        </td>
+                                        <td style='padding:8px 12px;text-align:center;border-bottom:1px solid #f1f5f9;'><span style='background:#f1f5f9;border:1px solid #e2e8f0;border-radius:999px;padding:1px 8px;font-size:11px;color:#374151;'>{$sz}</span></td>
+                                        <td style='padding:8px 12px;text-align:center;border-bottom:1px solid #f1f5f9;'><span style='background:#fef2f2;border:1px solid #fecaca;border-radius:999px;padding:1px 10px;font-size:12px;font-weight:800;color:#dc2626;'>{$qty}</span></td>
                                     </tr>
                                 ";
                             }
-
-                            $lineCount = count($returnableData);
 
                             return [
                                 Placeholder::make('_return_all_header')
                                     ->label('')
                                     ->columnSpanFull()
                                     ->content(new HtmlString("
-                                        <div style='
-                                            background:linear-gradient(135deg,#991b1b 0%,#dc2626 100%);
-                                            border-radius:12px;padding:14px 18px;
-                                            display:flex;align-items:center;gap:14px;
-                                            margin-bottom:4px;
-                                        '>
-                                            <div style='
-                                                width:44px;height:44px;background:rgba(255,255,255,.15);
-                                                border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;
-                                                border:1px solid rgba(255,255,255,.2);
-                                            '>
-                                                <svg width='22' height='22' fill='none' stroke='#fff' stroke-width='2' viewBox='0 0 24 24'>
-                                                    <path stroke-linecap='round' stroke-linejoin='round' d='M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15'/>
-                                                </svg>
-                                            </div>
+                                        <div style='background:linear-gradient(135deg,#991b1b 0%,#dc2626 100%);border-radius:12px;padding:14px 18px;display:flex;align-items:center;gap:14px;margin-bottom:4px;'>
                                             <div style='flex:1;'>
                                                 <div style='font-size:15px;font-weight:800;color:#fff;'>Return All Items</div>
-                                                <div style='font-size:11px;color:#fca5a5;margin-top:2px;line-height:1.5;'>
-                                                    This will return <strong style='color:#fff;'>{$totalReturnable} pc(s)</strong>
-                                                    across <strong style='color:#fff;'>{$lineCount} line(s)</strong>.
-                                                    Issuance status will <strong style='color:#fff;'>not</strong> change.
+                                                <div style='font-size:11px;color:#fca5a5;margin-top:2px;'>
+                                                    This will return <strong style='color:#fff;'>{$totalReturnable} pc(s)</strong> across <strong style='color:#fff;'>{$lineCount} line(s)</strong>. Status will <strong style='color:#fff;'>not</strong> change.
                                                 </div>
-                                            </div>
-                                            <div style='
-                                                display:flex;flex-direction:column;align-items:center;
-                                                background:rgba(255,255,255,.15);border-radius:10px;
-                                                padding:8px 16px;border:1px solid rgba(255,255,255,.2);flex-shrink:0;
-                                            '>
-                                                <div style='font-size:28px;font-weight:900;color:#fff;line-height:1;'>{$totalReturnable}</div>
-                                                <div style='font-size:9px;color:#fca5a5;text-transform:uppercase;letter-spacing:.05em;margin-top:2px;'>Total pcs</div>
                                             </div>
                                         </div>
                                     ")),
@@ -1492,7 +2114,6 @@ class UniformIssuancesTable
                                 Toggle::make('restore_stock')
                                     ->label('Restore all returned items back to stock?')
                                     ->default(true)
-                                    ->helperText('Turn on to add all returned quantities back to inventory.')
                                     ->columnSpanFull(),
 
                                 Placeholder::make('_return_all_table')
@@ -1500,25 +2121,15 @@ class UniformIssuancesTable
                                     ->columnSpanFull()
                                     ->content(new HtmlString("
                                         <div style='border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;'>
-                                            <div style='background:#1e3a5f;padding:8px 12px;display:flex;align-items:center;justify-content:space-between;'>
-                                                <span style='font-size:11px;font-weight:700;color:#fff;text-transform:uppercase;letter-spacing:.05em;'>Items to be Returned</span>
-                                                <span style='background:rgba(255,255,255,.15);border-radius:999px;padding:2px 10px;font-size:11px;font-weight:700;color:#93c5fd;'>{$lineCount} line(s)</span>
-                                            </div>
                                             <table style='width:100%;border-collapse:collapse;background:#fff;'>
-                                                <thead>
-                                                    <tr style='background:#f8fafc;'>
-                                                        <th style='padding:7px 12px;text-align:left;font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;'>Employee</th>
-                                                        <th style='padding:7px 12px;text-align:left;font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;'>Item</th>
-                                                        <th style='padding:7px 12px;text-align:center;font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;width:60px;'>Size</th>
-                                                        <th style='padding:7px 12px;text-align:center;font-size:10px;font-weight:700;color:#dc2626;text-transform:uppercase;width:55px;'>Qty</th>
-                                                    </tr>
-                                                </thead>
+                                                <thead><tr style='background:#f8fafc;'>
+                                                    <th style='padding:7px 12px;text-align:left;font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;'>Employee</th>
+                                                    <th style='padding:7px 12px;text-align:left;font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;'>Item</th>
+                                                    <th style='padding:7px 12px;text-align:center;font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;width:60px;'>Size</th>
+                                                    <th style='padding:7px 12px;text-align:center;font-size:10px;font-weight:700;color:#dc2626;text-transform:uppercase;width:55px;'>Qty</th>
+                                                </tr></thead>
                                                 <tbody>{$rows}</tbody>
                                             </table>
-                                            <div style='background:#fef2f2;border-top:1px solid #fecaca;padding:8px 14px;display:flex;align-items:center;justify-content:space-between;'>
-                                                <span style='font-size:11px;color:#991b1b;font-weight:500;'>⚠ All of the above will be returned upon confirmation.</span>
-                                                <span style='font-size:13px;font-weight:800;color:#dc2626;'>{$totalReturnable} pc(s) total</span>
-                                            </div>
                                         </div>
                                     ")),
                             ];
@@ -1537,7 +2148,6 @@ class UniformIssuancesTable
                             $totalReturned = 0;
 
                             foreach ($record->recipients as $recipient) {
-                                // Build already-returned map
                                 $alreadyMap = [];
                                 foreach ($recipient->returnItems as $ri) {
                                     $k = "{$ri->item_id}:{$ri->size}";
@@ -1553,7 +2163,6 @@ class UniformIssuancesTable
                                     $returnable  = $released - $alreadyBack;
                                     if ($returnable <= 0) continue;
 
-                                    // Save return record
                                     UniformIssuanceReturnItem::create([
                                         'uniform_issuance_recipient_id' => $recipient->id,
                                         'item_id'     => $issuanceItem->item_id,
@@ -1562,38 +2171,23 @@ class UniformIssuancesTable
                                         'returned_by' => $performer,
                                     ]);
 
-                                    // Optionally restore stock
                                     if ($restoreStock) {
                                         ($variantMap[$k] ?? null)?->increment('quantity', $returnable);
                                     }
 
                                     $itemName      = $issuanceItem->item?->name ?? "Item #{$issuanceItem->item_id}";
                                     $label         = $issuanceItem->size ? "{$itemName} ({$issuanceItem->size})" : $itemName;
-                                    $itemSnapshot[] = [
-                                        'label'    => "{$label} — {$recipient->employee_name}",
-                                        'quantity' => $returnable,
-                                        'action'   => 'returned',
-                                    ];
-                                    $noteEntries[] = [
-                                        'employee' => $recipient->employee_name,
-                                        'item'     => $itemName,
-                                        'size'     => $issuanceItem->size ?? '—',
-                                        'qty'      => $returnable,
-                                    ];
+                                    $itemSnapshot[] = ['label' => "{$label} — {$recipient->employee_name}", 'quantity' => $returnable, 'action' => 'returned'];
+                                    $noteEntries[]  = ['employee' => $recipient->employee_name, 'item' => $itemName, 'size' => $issuanceItem->size ?? '—', 'qty' => $returnable];
                                     $totalReturned += $returnable;
                                 }
                             }
 
                             if ($totalReturned === 0) {
-                                Notification::make()
-                                    ->title('Nothing to return.')
-                                    ->body('All items have already been fully returned.')
-                                    ->warning()
-                                    ->send();
+                                Notification::make()->title('Nothing to return.')->warning()->send();
                                 return;
                             }
 
-                            // Log without changing status
                             UniformIssuanceLog::create([
                                 'uniform_issuance_id' => $record->id,
                                 'action'              => 'return_items',
@@ -1601,11 +2195,10 @@ class UniformIssuancesTable
                                 'note'                => json_encode($itemSnapshot),
                             ]);
 
-                            // ── Append to issuance note tracker ──────────────────
                             $record->appendReturnNote($noteEntries, $performer);
 
                             Notification::make()
-                                ->title("{$totalReturned} pc(s) returned across all employees." . ($restoreStock ? ' Stock restored.' : ' Stock not restored.'))
+                                ->title("{$totalReturned} pc(s) returned." . ($restoreStock ? ' Stock restored.' : ''))
                                 ->color($restoreStock ? 'success' : 'warning')
                                 ->send();
                         }),
@@ -1633,12 +2226,12 @@ class UniformIssuancesTable
                         ->mutateRecordDataUsing(function (array $data, $record): array {
                             $record->loadMissing('recipients.items');
                             $data['employees'] = $record->recipients->map(fn ($recipient) => [
-                                'employee_name'  => $recipient->employee_name,
+                                'employee_name'   => $recipient->employee_name,
                                 'employee_status' => $recipient->employee_status ?? 'posted',
-                                'position_id'    => (string) $recipient->position_id,
-                                'uniform_set_id' => $recipient->uniform_set_id
-                                                        ? (string) $recipient->uniform_set_id
-                                                        : 'manual',
+                                'position_id'     => (string) $recipient->position_id,
+                                'uniform_set_id'  => $recipient->uniform_set_id
+                                                         ? (string) $recipient->uniform_set_id
+                                                         : 'manual',
                                 'items' => $recipient->items->map(fn ($item) => [
                                     'item_id'  => (string) $item->item_id,
                                     'size'     => $item->size,
@@ -1668,11 +2261,11 @@ class UniformIssuancesTable
                                 foreach ($items as $item) {
                                     \App\Models\UniformIssuanceItem::create([
                                         'uniform_issuance_recipient_id' => $recipient->id,
-                                        'item_id'             => $item['item_id'],
-                                        'size'                => $item['size'] ?? null,
-                                        'quantity'            => $item['quantity'] ?? 1,
-                                        'released_quantity'   => 0,
-                                        'remaining_quantity'  => $item['quantity'] ?? 1,
+                                        'item_id'            => $item['item_id'],
+                                        'size'               => $item['size'] ?? null,
+                                        'quantity'           => $item['quantity'] ?? 1,
+                                        'released_quantity'  => 0,
+                                        'remaining_quantity' => $item['quantity'] ?? 1,
                                     ]);
                                 }
                             }
@@ -1680,35 +2273,334 @@ class UniformIssuancesTable
                             return $record;
                         }),
 
-                        Action::make('view_transmittal_form')
-                            ->label('Transmittal Form')
-                            ->icon('heroicon-s-document-arrow-up')
-                            ->color('info')
-                            ->visible(fn ($record) =>
-                                $record->is_for_transmit &&
-                                in_array($record->status, ['partial', 'issued', 'returned'])
-                            )
-                            ->modalHeading('Transmittal Form')
-                            ->modalSubmitAction(false)
-                            ->modalCancelActionLabel('Close')
-                            ->modalWidth('3xl')
-                            ->form(fn ($record): array => self::buildTransmittalModal($record)),
+                    Action::make('view_transmittal_form')
+                        ->label('Transmittal Form')
+                        ->icon('heroicon-s-document-arrow-up')
+                        ->color('info')
+                        ->visible(fn ($record) =>
+                            $record->is_for_transmit &&
+                            in_array($record->status, ['partial', 'issued', 'returned'])
+                        )
+                        ->modalHeading('Transmittal Form')
+                        ->modalSubmitAction(false)
+                        ->modalCancelActionLabel('Close')
+                        ->modalWidth('3xl')
+                        ->form(fn ($record): array => self::buildTransmittalModal($record)),
 
-                        // ── RECEIVING COPY (partial, issued, returned) ────────────────
-                        Action::make('view_receiving_copy')
-                            ->label('Receiving Copy')
-                            ->icon('heroicon-s-document-text')
-                            ->color('success')
-                            ->visible(fn ($record) => in_array($record->status, ['partial', 'issued', 'returned']))
-                            ->modalHeading('Receiving Copy')
-                            ->modalSubmitAction(false)
-                            ->modalCancelActionLabel('Close')
-                            ->modalWidth('3xl')
-                            ->form(fn ($record): array => self::buildReceivingCopyModal($record)),
+                    Action::make('view_receiving_copy')
+                        ->label('Receiving Copy')
+                        ->icon('heroicon-s-document-text')
+                        ->color('success')
+                        ->visible(fn ($record) => in_array($record->status, ['partial', 'issued', 'returned']))
+                        ->modalHeading('Receiving Copy')
+                        ->modalSubmitAction(false)
+                        ->modalCancelActionLabel('Close')
+                        ->modalWidth('3xl')
+                        ->form(fn ($record): array => self::buildReceivingCopyModal($record)),
+
+                    Action::make('billing')
+                        ->label('For Billing')
+                        ->icon('heroicon-s-banknotes')
+                        ->color('indigo')
+                        ->visible(fn ($record) =>
+                            $record->status === 'issued' &&
+                            self::userCan('issue uniform-issuance')
+                        )
+                        ->modalHeading('Endorse for Billing')
+                        ->modalWidth('lg')
+                        ->form(function ($record): array {
+                            $record->loadMissing('issuanceType', 'recipients.billings');
+
+                            $issuanceTypeName = $record->issuanceType?->name ?? '';
+
+                            $eligible = $record->recipients->filter(fn ($r) =>
+                                \App\Models\UniformIssuanceBilling::isEligible(
+                                    $issuanceTypeName,
+                                    $r->employee_status ?? 'posted'
+                                )
+                            );
+
+                            $notYetEndorsed  = $eligible->filter(fn ($r) => $r->billings->isEmpty());
+                            $alreadyEndorsed = $eligible->filter(fn ($r) => $r->billings->isNotEmpty());
+                            $pendingCount    = $notYetEndorsed->count();
+                            $endorsedCount   = $alreadyEndorsed->count();
+                            $eligibleCount   = $eligible->count();
+
+                            $fields = [];
+
+                            $fields[] = \Filament\Forms\Components\Placeholder::make('_header')
+                                ->label('')
+                                ->columnSpanFull()
+                                ->content(new \Illuminate\Support\HtmlString("
+                                    <div style='
+                                        background:linear-gradient(to right,#1e1b4b,#4338ca);
+                                        border-radius:12px;padding:14px 18px;
+                                        display:flex;align-items:center;justify-content:space-between;
+                                    '>
+                                        <div>
+                                            <div style='font-size:15px;font-weight:800;color:#fff;'>💳 Endorse for Billing</div>
+                                            <div style='font-size:11px;color:#a5b4fc;margin-top:3px;'>
+                                                Type: <strong style='color:#fff;'>{$issuanceTypeName}</strong>
+                                            </div>
+                                        </div>
+                                        <div style='display:flex;gap:8px;'>
+                                            <div style='background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.2);border-radius:10px;padding:8px 14px;text-align:center;'>
+                                                <div style='font-size:20px;font-weight:900;color:#fff;line-height:1;'>{$pendingCount}</div>
+                                                <div style='font-size:9px;color:#a5b4fc;text-transform:uppercase;margin-top:2px;'>Pending</div>
+                                            </div>
+                                            <div style='background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.2);border-radius:10px;padding:8px 14px;text-align:center;'>
+                                                <div style='font-size:20px;font-weight:900;color:#6ee7b7;line-height:1;'>{$endorsedCount}</div>
+                                                <div style='font-size:9px;color:#a5b4fc;text-transform:uppercase;margin-top:2px;'>Endorsed</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                "));
+
+                            if ($eligibleCount === 0) {
+                                $fields[] = \Filament\Forms\Components\Placeholder::make('_none')
+                                    ->label('')
+                                    ->columnSpanFull()
+                                    ->content(new \Illuminate\Support\HtmlString("
+                                        <div style='text-align:center;padding:32px;background:#f9fafb;border:1px dashed #e5e7eb;border-radius:12px;'>
+                                            <div style='font-size:32px;'>🚫</div>
+                                            <div style='font-size:13px;font-weight:700;color:#374151;margin-top:8px;'>No Eligible Employees</div>
+                                            <div style='font-size:11px;color:#9ca3af;margin-top:4px;'>
+                                                No recipients qualify for billing under <strong>{$issuanceTypeName}</strong>.
+                                            </div>
+                                        </div>
+                                    "));
+                                return $fields;
+                            }
+
+                            $rowsHtml = '';
+                            foreach ($eligible as $recipient) {
+                                $empName    = e($recipient->employee_name);
+                                $empStatus  = $recipient->employee_status ?? 'posted';
+                                $billing    = $recipient->billings->first();
+                                $isEndorsed = $billing !== null;
+
+                                $statusChip = $isEndorsed
+                                    ? "<span style='background:#ecfdf5;border:1px solid #a7f3d0;border-radius:999px;padding:2px 10px;font-size:10px;font-weight:700;color:#059669;'>✅ Endorsed</span>"
+                                    : "<span style='background:#eff6ff;border:1px solid #bfdbfe;border-radius:999px;padding:2px 10px;font-size:10px;font-weight:700;color:#2563eb;'>⏳ Pending</span>";
+
+                                $endorsedMeta = '';
+                                if ($isEndorsed && $billing->endorsed_at) {
+                                    $endorsedAt  = \Carbon\Carbon::parse($billing->endorsed_at)->timezone('Asia/Manila')->format('M d, Y h:i A');
+                                    $endorsedBy  = e($billing->endorsed_by ?? '—');
+                                    $endorsedMeta = "
+                                        <div style='font-size:10px;color:#6b7280;margin-top:2px;'>
+                                            {$endorsedAt} · by <strong style='color:#374151;'>{$endorsedBy}</strong>
+                                        </div>
+                                    ";
+                                }
+
+                                $empStatusChip = match ($empStatus) {
+                                    'posted'   => "<span style='background:#ecfdf5;border:1px solid #a7f3d0;border-radius:999px;padding:1px 7px;font-size:10px;font-weight:600;color:#059669;'>Posted</span>",
+                                    'reliever' => "<span style='background:#fffbeb;border:1px solid #fde68a;border-radius:999px;padding:1px 7px;font-size:10px;font-weight:600;color:#d97706;'>Reliever</span>",
+                                    default    => "<span style='background:#f3f4f6;border:1px solid #e5e7eb;border-radius:999px;padding:1px 7px;font-size:10px;color:#6b7280;'>" . ucfirst($empStatus) . "</span>",
+                                };
+
+                                $rowBg    = $isEndorsed ? '#f0fdf4' : '#ffffff';
+                                $dotColor = $isEndorsed ? '#059669' : '#d1d5db';
+
+                                $rowsHtml .= "
+                                    <div style='
+                                        display:flex;align-items:center;gap:12px;
+                                        padding:10px 14px;
+                                        border-bottom:1px solid #f1f5f9;
+                                        background:{$rowBg};
+                                    '>
+                                        <div style='width:8px;height:8px;border-radius:50%;background:{$dotColor};flex-shrink:0;'></div>
+                                        <div style='flex:1;min-width:0;'>
+                                            <div style='display:flex;align-items:center;gap:6px;flex-wrap:wrap;'>
+                                                <span style='font-size:13px;font-weight:700;color:#111827;'>{$empName}</span>
+                                                {$empStatusChip}
+                                                {$statusChip}
+                                            </div>
+                                            {$endorsedMeta}
+                                        </div>
+                                    </div>
+                                ";
+                            }
+
+                            $fields[] = \Filament\Forms\Components\Placeholder::make('_employee_list')
+                                ->label('')
+                                ->columnSpanFull()
+                                ->content(new \Illuminate\Support\HtmlString("
+                                    <div style='border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;'>
+                                        <div style='background:#1e3a5f;padding:8px 14px;'>
+                                            <span style='font-size:11px;font-weight:700;color:#fff;text-transform:uppercase;letter-spacing:.05em;'>
+                                                {$eligibleCount} Eligible Employee(s)
+                                            </span>
+                                        </div>
+                                        {$rowsHtml}
+                                    </div>
+                                "));
+
+                            if ($pendingCount === 0) {
+                                $fields[] = \Filament\Forms\Components\Placeholder::make('_all_done')
+                                    ->label('')
+                                    ->columnSpanFull()
+                                    ->content(new \Illuminate\Support\HtmlString("
+                                        <div style='
+                                            display:flex;align-items:center;gap:8px;
+                                            background:#ecfdf5;border:1px solid #a7f3d0;
+                                            border-radius:8px;padding:10px 14px;
+                                        '>
+                                            <svg width='15' height='15' fill='none' stroke='#059669' stroke-width='2' viewBox='0 0 24 24'>
+                                                <path stroke-linecap='round' stroke-linejoin='round' d='M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z'/>
+                                            </svg>
+                                            <span style='font-size:12px;color:#065f46;font-weight:600;'>
+                                                All eligible employees have already been endorsed.
+                                            </span>
+                                        </div>
+                                    "));
+
+                                $fields[] = \Filament\Forms\Components\Hidden::make('endorse_mode')->default('none');
+                                return $fields;
+                            }
+
+                            $fields[] = \Filament\Forms\Components\Placeholder::make('_action_label')
+                                ->label('')
+                                ->columnSpanFull()
+                                ->content(new \Illuminate\Support\HtmlString("
+                                    <div style='display:flex;align-items:center;gap:10px;margin:2px 0;'>
+                                        <div style='flex:1;height:1px;background:#e5e7eb;'></div>
+                                        <span style='font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.06em;'>Endorse Options</span>
+                                        <div style='flex:1;height:1px;background:#e5e7eb;'></div>
+                                    </div>
+                                "));
+
+                            $fields[] = \Filament\Forms\Components\Select::make('endorse_mode')
+                                ->label('')
+                                ->options([
+                                    'all' => "✅ Endorse All — {$pendingCount} pending employee(s)",
+                                    'one' => '👤 Endorse One Employee',
+                                ])
+                                ->default('all')
+                                ->required()
+                                ->live()
+                                ->columnSpanFull();
+
+                            $pendingOptions = $notYetEndorsed->mapWithKeys(fn ($r) => [
+                                $r->id => $r->employee_name . ' (' . ucfirst($r->employee_status ?? 'posted') . ')'
+                            ])->all();
+
+                            $fields[] = \Filament\Forms\Components\Select::make('recipient_id')
+                                ->label('Select Employee to Endorse')
+                                ->placeholder('Choose an employee...')
+                                ->options($pendingOptions)
+                                ->required()
+                                ->searchable()
+                                ->visible(fn ($get) => $get('endorse_mode') === 'one')
+                                ->columnSpanFull();
+
+                            $fields[] = \Filament\Forms\Components\Placeholder::make('_once_note')
+                                ->label('')
+                                ->columnSpanFull()
+                                ->content(new \Illuminate\Support\HtmlString("
+                                    <div style='
+                                        display:flex;align-items:flex-start;gap:10px;
+                                        background:linear-gradient(to right,#fffbeb,#fef3c7);
+                                        border:1px solid #fde68a;border-left:4px solid #f59e0b;
+                                        border-radius:10px;padding:11px 14px;
+                                    '>
+                                        <div>
+                                            <div style='font-size:12px;font-weight:800;color:#92400e;margin-bottom:2px;'>Once Only</div>
+                                            <div style='font-size:11px;color:#78350f;line-height:1.5;'>
+                                                Each employee can only be endorsed <strong>once</strong>.
+                                            </div>
+                                        </div>
+                                    </div>
+                                "));
+
+                            return $fields;
+                        })
+                        ->action(function ($record, array $data): void {
+                            $record->loadMissing('issuanceType', 'recipients.billings');
+
+                            $issuanceTypeName = $record->issuanceType?->name ?? '';
+                            $endorser         = auth()->user()?->name ?? 'System';
+                            $mode             = $data['endorse_mode'] ?? 'all';
+
+                            if ($mode === 'none') {
+                                \Filament\Notifications\Notification::make()
+                                    ->title('Nothing to endorse.')
+                                    ->warning()->send();
+                                return;
+                            }
+
+                            if ($mode === 'one') {
+                                $recipientId = $data['recipient_id'] ?? null;
+                                if (! $recipientId) {
+                                    \Filament\Notifications\Notification::make()->title('No employee selected.')->warning()->send();
+                                    return;
+                                }
+
+                                $recipient = $record->recipients->firstWhere('id', $recipientId);
+                                if (! $recipient) {
+                                    \Filament\Notifications\Notification::make()->title('Employee not found.')->danger()->send();
+                                    return;
+                                }
+
+                                if ($recipient->billings->isNotEmpty()) {
+                                    \Filament\Notifications\Notification::make()
+                                        ->title('Already endorsed.')
+                                        ->warning()->send();
+                                    return;
+                                }
+
+                                if (! \App\Models\UniformIssuanceBilling::isEligible($issuanceTypeName, $recipient->employee_status ?? 'posted')) {
+                                    \Filament\Notifications\Notification::make()->title('Not eligible.')->danger()->send();
+                                    return;
+                                }
+
+                                \App\Models\UniformIssuanceBilling::create([
+                                    'uniform_issuance_id'           => $record->id,
+                                    'uniform_issuance_recipient_id' => $recipient->id,
+                                    'employee_name'                 => $recipient->employee_name,
+                                    'employee_status'               => $recipient->employee_status ?? 'posted',
+                                    'issuance_type'                 => $issuanceTypeName,
+                                    'bill_status'                   => 'endorsed',
+                                    'endorsed_at'                   => now(),
+                                    'endorsed_by'                   => $endorser,
+                                ]);
+
+                                \Filament\Notifications\Notification::make()
+                                    ->title("✅ {$recipient->employee_name} endorsed for billing.")
+                                    ->success()->send();
+                                return;
+                            }
+
+                            $count = 0;
+                            foreach ($record->recipients as $recipient) {
+                                if (! \App\Models\UniformIssuanceBilling::isEligible($issuanceTypeName, $recipient->employee_status ?? 'posted')) continue;
+                                if ($recipient->billings->isNotEmpty()) continue;
+
+                                \App\Models\UniformIssuanceBilling::create([
+                                    'uniform_issuance_id'           => $record->id,
+                                    'uniform_issuance_recipient_id' => $recipient->id,
+                                    'employee_name'                 => $recipient->employee_name,
+                                    'employee_status'               => $recipient->employee_status ?? 'posted',
+                                    'issuance_type'                 => $issuanceTypeName,
+                                    'bill_status'                   => 'endorsed',
+                                    'endorsed_at'                   => now(),
+                                    'endorsed_by'                   => $endorser,
+                                ]);
+                                $count++;
+                            }
+
+                            if ($count === 0) {
+                                \Filament\Notifications\Notification::make()->title('Nothing to endorse.')->warning()->send();
+                                return;
+                            }
+
+                            \Filament\Notifications\Notification::make()
+                                ->title("✅ {$count} employee(s) endorsed for billing.")
+                                ->success()->send();
+                        }),
 
                 ]),
-
-                
 
                 // ── VIEW EMPLOYEES ────────────────────────────────────────────
                 Action::make('view_employees')
@@ -1747,7 +2639,6 @@ class UniformIssuancesTable
 
                             $statusHtml = "<span style='background:{$statusBadge['bg']};border:1px solid {$statusBadge['border']};border-radius:999px;padding:2px 10px;font-size:10px;font-weight:700;color:{$statusBadge['color']};text-transform:uppercase;letter-spacing:.05em;'>{$statusBadge['label']}</span>";
 
-                            // Always show returned column if there are any return items
                             $hasReturns = $recipient->returnItems->isNotEmpty();
                             $thReturned = $hasReturns ? "<th style='padding:9px 14px;text-align:center;font-size:11px;font-weight:700;color:#dc2626;text-transform:uppercase;'>Returned</th>" : '';
 
@@ -1858,6 +2749,7 @@ class UniformIssuancesTable
                             'return_items' => ['color' => '#ea580c', 'bg' => '#fff7ed', 'border' => '#fed7aa', 'label' => 'Items Returned',  'icon' => 'M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15'],
                             'returned'     => ['color' => '#ea580c', 'bg' => '#fff7ed', 'border' => '#fed7aa', 'label' => 'Returned',        'icon' => 'M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15'],
                             'cancelled'    => ['color' => '#dc2626', 'bg' => '#fef2f2', 'border' => '#fecaca', 'label' => 'Cancelled',       'icon' => 'M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z'],
+                            'item_changed' => ['color' => '#7c3aed', 'bg' => '#f5f3ff', 'border' => '#ddd6fe', 'label' => 'Item Changed',    'icon' => 'M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z'],
                         ];
 
                         $fields = [];
@@ -1878,7 +2770,6 @@ class UniformIssuancesTable
                             if ($rawNote) {
                                 $decoded = json_decode($rawNote, true);
                                 if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
-
                                     $logQtyIssued   = 0;
                                     $logQtyReturned = 0;
                                     foreach ($decoded as $item) {
@@ -1901,22 +2792,48 @@ class UniformIssuancesTable
                                     foreach ($decoded as $item) {
                                         $label = e($item['label'] ?? '');
                                         $chips = '';
-                                        if (($item['ordered'] ?? null) !== null) {
-                                            $chips .= "<span style='background:#f3f4f6;border:1px solid #e5e7eb;border-radius:999px;padding:1px 8px;font-size:11px;color:#6b7280;font-weight:500;'>📦 {$item['ordered']} ordered</span> ";
-                                        }
-                                        if (isset($item['released'])) {
-                                            $chips .= "<span style='background:#eff6ff;border:1px solid #bfdbfe;border-radius:999px;padding:1px 8px;font-size:11px;color:#2563eb;font-weight:600;'>📤 {$item['released']} issued</span> ";
-                                            if (($item['remaining'] ?? 0) > 0) {
-                                                $chips .= "<span style='background:#f5f3ff;border:1px solid #ddd6fe;border-radius:999px;padding:1px 8px;font-size:11px;color:#7c3aed;font-weight:600;'>⏳ {$item['remaining']} remaining</span>";
+
+                                        if (! empty($item['_from'])) {
+                                            $from  = e($item['_from']);
+                                            $to    = e($item['_to']);
+                                            $chips = "
+                                                <div style='display:flex;flex-direction:column;gap:4px;align-items:flex-end;'>
+                                                    <div style='display:flex;align-items:center;gap:6px;'>
+                                                        <span style='font-size:10px;color:#9ca3af;font-weight:600;text-transform:uppercase;'>Old</span>
+                                                        <span style='background:#fef2f2;border:1px solid #fecaca;border-radius:999px;padding:2px 10px;font-size:11px;color:#dc2626;font-weight:600;'>{$from}</span>
+                                                    </div>
+                                                    <div style='display:flex;align-items:center;gap:6px;'>
+                                                        <span style='font-size:10px;color:#9ca3af;font-weight:600;text-transform:uppercase;'>New</span>
+                                                        <span style='background:#f0fdf4;border:1px solid #bbf7d0;border-radius:999px;padding:2px 10px;font-size:11px;color:#16a34a;font-weight:600;'>{$to}</span>
+                                                    </div>
+                                                </div>
+                                            ";
+                                        } else {
+                                            if (($item['ordered'] ?? null) !== null) {
+                                                $chips .= "<span style='background:#f3f4f6;border:1px solid #e5e7eb;border-radius:999px;padding:1px 8px;font-size:11px;color:#6b7280;font-weight:500;'>📦 {$item['ordered']} ordered</span> ";
                                             }
-                                        } elseif (isset($item['quantity'])) {
-                                            $action = $item['action'] ?? '';
-                                            $chips .= "<span style='background:#ecfdf5;border:1px solid #a7f3d0;border-radius:999px;padding:1px 8px;font-size:11px;color:#059669;font-weight:600;'>✅ {$item['quantity']} {$action}</span>";
+                                            if (isset($item['released'])) {
+                                                $chips .= "<span style='background:#eff6ff;border:1px solid #bfdbfe;border-radius:999px;padding:1px 8px;font-size:11px;color:#2563eb;font-weight:600;'>📤 {$item['released']} issued</span> ";
+                                                if (($item['remaining'] ?? 0) > 0) {
+                                                    $chips .= "<span style='background:#f5f3ff;border:1px solid #ddd6fe;border-radius:999px;padding:1px 8px;font-size:11px;color:#7c3aed;font-weight:600;'>⏳ {$item['remaining']} remaining</span>";
+                                                }
+                                            } elseif (isset($item['quantity'])) {
+                                                $action = $item['action'] ?? '';
+                                                $chips .= "<span style='background:#ecfdf5;border:1px solid #a7f3d0;border-radius:999px;padding:1px 8px;font-size:11px;color:#059669;font-weight:600;'>✅ {$item['quantity']} {$action}</span>";
+                                            }
                                         }
-                                        $rows .= "<div style='display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid {$c['border']};'><span style='font-size:12px;font-weight:500;color:#374151;'>{$label}</span><div style='display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end;'>{$chips}</div></div>";
+
+                                        $rows .= "
+                                            <div style='
+                                                display:flex;justify-content:space-between;align-items:center;
+                                                padding:8px 0;border-bottom:1px solid {$c['border']};
+                                            '>
+                                                <span style='font-size:12px;font-weight:500;color:#374151;'>{$label}</span>
+                                                <div style='display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end;'>{$chips}</div>
+                                            </div>
+                                        ";
                                     }
                                     $itemsHtml = "<div style='margin-top:8px;border-top:1px solid {$c['border']};padding-top:4px;'>{$rows}</div>";
-
                                 } else {
                                     $noteHtml = "<div style='font-size:12px;color:#6b7280;margin-top:6px;padding-top:6px;border-top:1px solid {$c['border']};'>" . e($rawNote) . "</div>";
                                 }
@@ -1959,7 +2876,6 @@ class UniformIssuancesTable
 
             ->toolbarActions([
                 BulkActionGroup::make([
-                    // ── BULK ISSUE ────────────────────────────────────────────
                     BulkAction::make('bulk_issue')
                         ->label('Issue Selected')
                         ->color('success')
@@ -2001,7 +2917,6 @@ class UniformIssuancesTable
                                 }
                                 $record->update(['status' => 'issued', 'issued_at' => now()]);
 
-                                // Auto-create transmittal if flagged
                                 $record->refresh();
                                 self::maybeCreateTransmittal($record);
 
@@ -2013,7 +2928,6 @@ class UniformIssuancesTable
                         })
                         ->deselectRecordsAfterCompletion(),
 
-                    // ── BULK PRINT RECEIVING COPIES ───────────────────────────
                     BulkAction::make('bulk_print_receiving')
                         ->label('Print Receiving Copies')
                         ->color('success')
@@ -2025,9 +2939,7 @@ class UniformIssuancesTable
                             if ($eligible->isEmpty()) {
                                 Notification::make()
                                     ->title('No eligible issuances selected.')
-                                    ->body('Only partial, issued, or returned issuances have receiving copies.')
-                                    ->warning()
-                                    ->send();
+                                    ->warning()->send();
                                 return;
                             }
 
@@ -2038,7 +2950,6 @@ class UniformIssuancesTable
 
                             Notification::make()
                                 ->title("Opening {$eligible->count()} issuance(s){$msg}")
-                                ->body('A new tab will open with all slips — 2 per A4 page. Partial issuances will show per-release slips.')
                                 ->success()
                                 ->actions([
                                     Action::make('open')
@@ -2051,8 +2962,6 @@ class UniformIssuancesTable
                         })
                         ->deselectRecordsAfterCompletion(),
 
-                    // ── BULK RETURN ───────────────────────────────────────────
-                    // Bulk return records items returned WITHOUT changing status.
                     BulkAction::make('bulk_return')
                         ->label('Return Items (Selected)')
                         ->color('warning')
@@ -2065,7 +2974,6 @@ class UniformIssuancesTable
                             Toggle::make('restore_stock')
                                 ->label('Restore items back to stock?')
                                 ->default(true)
-                                ->helperText('Turn on to restore full issued quantities to inventory for all selected records.')
                                 ->columnSpanFull(),
                         ])
                         ->action(function (Collection $records, array $data) {
@@ -2081,7 +2989,6 @@ class UniformIssuancesTable
                                 $itemSnapshot = [];
 
                                 foreach ($record->recipients as $recipient) {
-                                    // Sum already-returned per item to avoid over-returning
                                     $alreadyReturnedMap = [];
                                     foreach ($recipient->returnItems as $ri) {
                                         $key = "{$ri->item_id}:{$ri->size}";
@@ -2110,16 +3017,11 @@ class UniformIssuancesTable
 
                                         $itemName       = $item->item?->name ?? "Item #{$item->item_id}";
                                         $label          = $item->size ? "{$itemName} ({$item->size})" : $itemName;
-                                        $itemSnapshot[] = [
-                                            'label'    => "{$label} — {$recipient->employee_name}",
-                                            'quantity' => $returnable,
-                                            'action'   => 'returned',
-                                        ];
+                                        $itemSnapshot[] = ['label' => "{$label} — {$recipient->employee_name}", 'quantity' => $returnable, 'action' => 'returned'];
                                     }
                                 }
 
                                 if (! empty($itemSnapshot)) {
-                                    // Log return WITHOUT changing status
                                     UniformIssuanceLog::create([
                                         'uniform_issuance_id' => $record->id,
                                         'action'              => 'return_items',
@@ -2131,13 +3033,11 @@ class UniformIssuancesTable
                             }
 
                             Notification::make()
-                                ->title("{$returned} issuance(s) had items returned. " . ($restoreStock ? 'Stock restored.' : 'Stock not restored.'))
-                                ->success()
-                                ->send();
+                                ->title("{$returned} issuance(s) had items returned." . ($restoreStock ? ' Stock restored.' : ''))
+                                ->success()->send();
                         })
                         ->deselectRecordsAfterCompletion(),
 
-                    // ── BULK CANCEL ───────────────────────────────────────────
                     BulkAction::make('bulk_cancel')
                         ->label('Cancel Selected')
                         ->color('danger')
@@ -2160,7 +3060,6 @@ class UniformIssuancesTable
                                 ->danger()->send();
                         })
                         ->deselectRecordsAfterCompletion(),
-
                 ]),
             ]);
     }

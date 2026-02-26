@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use App\Models\UniformIssuanceBilling;
 
 class UniformIssuanceRecipient extends Model
 {
@@ -67,5 +68,10 @@ class UniformIssuanceRecipient extends Model
     public function returnItems(): HasMany
     {
         return $this->hasMany(UniformIssuanceReturnItem::class);
+    }
+
+    public function billings(): HasMany
+    {
+        return $this->hasMany(UniformIssuanceBilling::class);
     }
 }
