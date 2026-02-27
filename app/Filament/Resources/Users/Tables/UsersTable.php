@@ -4,26 +4,12 @@ namespace App\Filament\Resources\Users\Tables;
 
 use Filament\Actions\BulkActionGroup;
 use Filament\Actions\DeleteBulkAction;
-use Filament\Actions\EditAction;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
 use Illuminate\Support\Facades\Auth;
 
 class UsersTable
 {
-    // -------------------------------------------------------------------------
-    // Permission Helper
-    // -------------------------------------------------------------------------
-
-    private static function userCan(string $permission): bool
-    {
-        return Auth::user()?->can($permission) ?? false;
-    }
-
-    // -------------------------------------------------------------------------
-    // Table Configuration
-    // -------------------------------------------------------------------------
-
     public static function configure(Table $table): Table
     {
         return $table
@@ -44,17 +30,11 @@ class UsersTable
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
             ])
-            ->filters([
-                //
-            ])
-            ->recordActions([
-                EditAction::make()
-                    ->visible(fn () => self::userCan('update user')),
-            ])
+            ->filters([])
             ->toolbarActions([
                 BulkActionGroup::make([
                     DeleteBulkAction::make()
-                        ->visible(fn () => self::userCan('delete user')),
+                        ->visible(fn () => Auth::user()?->can('delete user') ?? false),
                 ]),
             ]);
     }

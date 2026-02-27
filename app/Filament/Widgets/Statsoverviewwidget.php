@@ -11,27 +11,39 @@ use App\Models\Category;
 use Filament\Widgets\StatsOverviewWidget as BaseWidget;
 use Filament\Widgets\StatsOverviewWidget\Stat;
 use Filament\Facades\Filament;
+use Illuminate\Support\Facades\Auth;
 
 class StatsOverviewWidget extends BaseWidget
 {
     protected static ?int $sort = 1;
 
+    // ── Spatie permission helper ──────────────────────────────────────────
+
+    private static function userCan(string $permission): bool
+    {
+        return Auth::user()?->can($permission) ?? false;
+    }
+
+    // ── Visibility ────────────────────────────────────────────────────────
+
+    public static function canView(): bool
+    {
+        return static::userCan('view stats-overview-widget');
+    }
 
     protected function getStats(): array
     {
         $tenant = Filament::getTenant();
 
-        // Get item IDs for this tenant
-        $itemIds = $tenant ? $tenant->items()->pluck('items.id') : null;
+        $itemIds  = $tenant ? $tenant->items()->pluck('items.id') : null;
         $hasItems = $itemIds && $itemIds->isNotEmpty();
 
-        // If tenant exists but has no items, show zeros
         $variantQuery = ItemVariant::query();
         if ($tenant) {
             if ($hasItems) {
                 $variantQuery->whereIn('item_id', $itemIds);
             } else {
-                $variantQuery->whereRaw('0 = 1'); // explicit empty — no variants
+                $variantQuery->whereRaw('0 = 1');
             }
         }
 
@@ -50,7 +62,7 @@ class StatsOverviewWidget extends BaseWidget
                 : collect()
         );
 
-        $lowStockCount = $lowStockIds->count(); // ← now always defined
+        $lowStockCount = $lowStockIds->count();
 
         $issuanceQuery = Issuance::query()
             ->when($tenant, fn ($q) => $q->where('department_id', $tenant->id));
@@ -63,7 +75,6 @@ class StatsOverviewWidget extends BaseWidget
         $issuedCount       = (clone $issuanceQuery)->where('status', 'issued')->count();
         $pendingRestocks   = (clone $restockQuery)->where('status', 'pending')->count();
         $partialRestocks   = (clone $restockQuery)->where('status', 'partial')->count();
-
 
         return [
             Stat::make('Total Items', $totalItems)

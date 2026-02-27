@@ -22,16 +22,7 @@ class UserResource extends Resource
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedUserGroup;
 
-    protected static ?string $recordTitleAttribute = 'users';
-
-    // -------------------------------------------------------------------------
-    // Permissions
-    // -------------------------------------------------------------------------
-
-    private static function userCan(string $permission): bool
-    {
-        return Auth::user()?->can($permission) ?? false;
-    }
+    protected static ?string $recordTitleAttribute = 'name';
 
     public static function canViewAny(): bool
     {
@@ -39,22 +30,14 @@ class UserResource extends Resource
         if (! $user) return false;
         return $user->hasRole('super_admin') || $user->can('view-any user');
     }
-    public static function canCreate(): bool        { return self::userCan('create user'); }
-    public static function canEdit($record): bool   { return self::userCan('update user'); }
-    public static function canDelete($record): bool { return self::userCan('delete user'); }
-
-    // -------------------------------------------------------------------------
-    // Navigation
-    // -------------------------------------------------------------------------
+    public static function canCreate(): bool        { return Auth::user()?->can('create user') ?? false; }
+    public static function canEdit($record): bool   { return Auth::user()?->can('update user') ?? false; }
+    public static function canDelete($record): bool { return Auth::user()?->can('delete user') ?? false; }
 
     public static function getNavigationGroup(): ?string
     {
         return 'User Management';
     }
-
-    // -------------------------------------------------------------------------
-    // Schema / Table
-    // -------------------------------------------------------------------------
 
     public static function form(Schema $schema): Schema
     {
@@ -66,21 +49,17 @@ class UserResource extends Resource
         return UsersTable::configure($table);
     }
 
-    // -------------------------------------------------------------------------
-    // Pages / Relations
-    // -------------------------------------------------------------------------
-
     public static function getRelations(): array
     {
-        return [
-            //
-        ];
+        return [];
     }
 
     public static function getPages(): array
     {
         return [
-            'index' => ListUsers::route('/'),
+            'index'  => ListUsers::route('/'),
+            'create' => CreateUser::route('/create'),
+            'edit'   => EditUser::route('/{record}/edit'),
         ];
     }
 }

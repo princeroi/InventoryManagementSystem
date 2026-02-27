@@ -7,6 +7,7 @@ use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
 use Filament\Widgets\TableWidget as BaseWidget;
 use Filament\Facades\Filament;
+use Illuminate\Support\Facades\Auth;
 
 class RecentIssuancesWidget extends BaseWidget
 {
@@ -15,6 +16,20 @@ class RecentIssuancesWidget extends BaseWidget
     protected int | string | array $columnSpan = 1;
 
     protected static ?string $heading = 'Recent Issuances';
+
+    // ── Spatie permission helper ──────────────────────────────────────────
+
+    private static function userCan(string $permission): bool
+    {
+        return Auth::user()?->can($permission) ?? false;
+    }
+
+    // ── Visibility ────────────────────────────────────────────────────────
+
+    public static function canView(): bool
+    {
+        return static::userCan('view recent-issuances-widget');
+    }
 
     public function table(Table $table): Table
     {

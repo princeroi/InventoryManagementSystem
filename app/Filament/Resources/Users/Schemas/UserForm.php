@@ -4,12 +4,9 @@ namespace App\Filament\Resources\Users\Schemas;
 
 use Filament\Forms\Components\DateTimePicker;
 use Filament\Forms\Components\TextInput;
-use Filament\Forms\Components\MultiSelect;
 use Filament\Schemas\Schema;
 use Filament\Forms\Components\Select;
-use Filament\Pages\Page;
-use Illuminate\Support\Facades\Hash;
-use Filamaent\Resources\Pages\CreateRecord;
+use Filament\Forms\Components\MultiSelect;
 
 class UserForm
 {
@@ -26,14 +23,15 @@ class UserForm
                 DateTimePicker::make('email_verified_at'),
                 TextInput::make('password')
                     ->password()
-                    ->dehydrated(fn (string $state): string => Hash::make($state))
+                    ->revealable()
+                    ->afterStateHydrated(fn ($component, $record) => $component->state($record?->getRawOriginal('password')))
                     ->dehydrated(fn (?string $state): bool => filled($state))
-                    ->required(fn (Page $livewire): bool => $livewire instanceof CreateUser),
+                    ->required(fn ($record): bool => $record === null),
                 Select::make('roles')
                     ->multiple()
                     ->relationship('roles', 'name'),
                 MultiSelect::make('departments')
-                    ->relationship('departments', 'name') 
+                    ->relationship('departments', 'name')
                     ->label('Departments'),
             ]);
     }

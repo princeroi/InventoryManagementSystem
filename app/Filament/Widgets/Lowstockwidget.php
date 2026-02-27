@@ -8,6 +8,7 @@ use Filament\Tables\Table;
 use Filament\Widgets\TableWidget as BaseWidget;
 use Illuminate\Database\Eloquent\Builder;
 use Filament\Facades\Filament;
+use Illuminate\Support\Facades\Auth;
 
 class LowStockWidget extends BaseWidget
 {
@@ -16,6 +17,20 @@ class LowStockWidget extends BaseWidget
     protected int | string | array $columnSpan = 'full';
 
     protected static ?string $heading = 'Low & Out of Stock Items';
+
+    // ── Spatie permission helper ──────────────────────────────────────────
+
+    private static function userCan(string $permission): bool
+    {
+        return Auth::user()?->can($permission) ?? false;
+    }
+
+    // ── Visibility ────────────────────────────────────────────────────────
+
+    public static function canView(): bool
+    {
+        return static::userCan('view low-stock-widget');
+    }
 
     public function table(Table $table): Table
     {

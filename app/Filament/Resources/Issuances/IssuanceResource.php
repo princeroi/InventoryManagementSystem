@@ -19,7 +19,7 @@ class IssuanceResource extends Resource
 {
     public static function canAccess(): bool
     {
-        return Filament::getTenant()?->slug === 'operation';
+        return in_array(Filament::getTenant()?->slug, ['operation',]);
     }
     protected static ?string $model = Issuance::class;
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedArrowUpOnSquare;
