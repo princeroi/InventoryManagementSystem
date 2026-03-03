@@ -552,7 +552,12 @@ class UniformIssuancesTable
         $siteName         = e($record->site?->name ?? '—');
         $issuanceTypeName = e($record->issuanceType?->name ?? '—');
 
-        $printUrl = url("/transmittal-copy/issuance/{$record->id}/all");
+        // ── Partition logs (same as RC modal) ────────────────────────────────
+        $releaseLogs = $record->logs
+            ->whereIn('action', ['partial', 'issued'])
+            ->filter(fn ($log) => self::isJsonSnapshot($log->note))
+            ->sortBy('created_at')
+            ->values();
 
         $changeLogs = $record->logs
             ->where('action', 'item_changed')
@@ -560,23 +565,11 @@ class UniformIssuancesTable
             ->sortBy('created_at')
             ->values();
 
+        $releaseCount   = $releaseLogs->count();
         $changeLogCount = $changeLogs->count();
+        $recipientCount = $record->recipients->count();
 
-        $statusBadge = match ($record->status) {
-            'partial'  => ['bg' => '#f59e0b', 'label' => 'PARTIAL'],
-            'issued'   => ['bg' => '#059669', 'label' => 'ISSUED'],
-            'returned' => ['bg' => '#dc2626', 'label' => 'RETURNED'],
-            default    => ['bg' => '#6b7280', 'label' => strtoupper($record->status)],
-        };
-
-        $txnBadgeHtml = $txnNo
-            ? "<span style='background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.3);color:#fff;font-size:11px;font-weight:800;padding:2px 12px;border-radius:999px;letter-spacing:.05em;'>
-                   📋 {$txnNo}
-               </span>"
-            : "<span style='background:rgba(255,255,255,.1);color:#fde68a;font-size:10px;font-weight:700;padding:2px 10px;border-radius:999px;'>
-                   ⚠ No transmittal number yet
-               </span>";
-
+        // Compute totals
         $totalLines = 0;
         $totalPcs   = 0;
         foreach ($record->recipients as $recipient) {
@@ -588,9 +581,38 @@ class UniformIssuancesTable
             }
         }
 
+        // Slip / page count (same logic as RC)
+        if ($releaseCount > 0) {
+            $totalSlips = 0;
+            foreach ($releaseLogs as $log) {
+                $snap      = json_decode($log->note, true);
+                $employees = collect($snap)->pluck('label')->map(function ($label) {
+                    $parts = explode(' — ', $label, 2);
+                    return trim($parts[1] ?? '');
+                })->filter()->unique()->count();
+                $totalSlips += max($employees, 1);
+            }
+        } else {
+            $totalSlips = $recipientCount;
+        }
+        $pageCount = (int) ceil($totalSlips / 2);
+
+        $printAllUrl = url("/transmittal-copy/issuance/{$record->id}/all");
+
+        $statusBadge = match ($record->status) {
+            'partial'  => ['bg' => '#f59e0b', 'label' => 'PARTIAL — ' . $releaseCount . ' Release(s)'],
+            'issued'   => ['bg' => '#059669', 'label' => 'ISSUED — ' . $releaseCount . ' Release(s)'],
+            'returned' => ['bg' => '#dc2626', 'label' => 'RETURNED'],
+            default    => ['bg' => '#6b7280', 'label' => strtoupper($record->status)],
+        };
+
+        $txnBadgeHtml = $txnNo
+            ? "<span style='background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.3);color:#fff;font-size:11px;font-weight:800;padding:2px 12px;border-radius:999px;letter-spacing:.05em;'>📋 {$txnNo}</span>"
+            : "<span style='background:rgba(255,255,255,.1);color:#fde68a;font-size:10px;font-weight:700;padding:2px 10px;border-radius:999px;'>⚠ No transmittal number yet</span>";
+
         $fields = [];
 
-        // ── Topbar ────────────────────────────────────────────────────────────────
+        // ── Topbar ────────────────────────────────────────────────────────────
         $fields[] = \Filament\Forms\Components\Placeholder::make('tx_topbar')
             ->label('')
             ->columnSpanFull()
@@ -603,24 +625,21 @@ class UniformIssuancesTable
                     margin-bottom:16px;
                 '>
                     <div>
-                        <div style='display:flex;align-items:center;gap:8px;margin-bottom:4px;'>
+                        <div style='display:flex;align-items:center;gap:8px;'>
                             <div style='font-size:14px;font-weight:800;color:#fff;'>📮 Transmittal Form</div>
-                            <span style='background:{$statusBadge['bg']};color:#fff;font-size:9px;font-weight:800;padding:2px 10px;border-radius:999px;letter-spacing:.06em;'>
-                                {$statusBadge['label']}
-                            </span>
+                            <span style='background:{$statusBadge['bg']};color:#fff;font-size:9px;font-weight:800;padding:2px 10px;border-radius:999px;letter-spacing:.06em;'>{$statusBadge['label']}</span>
                             {$txnBadgeHtml}
                             " . ($changeLogCount > 0 ? "<span style='background:#f59e0b;color:#fff;font-size:9px;font-weight:800;padding:2px 10px;border-radius:999px;'>🔄 {$changeLogCount} Amendment(s)</span>" : '') . "
                         </div>
-                        <div style='font-size:11px;color:#93c5fd;margin-top:2px;'>
+                        <div style='font-size:11px;color:#93c5fd;margin-top:3px;'>
                             {$siteName} &nbsp;·&nbsp; {$issuanceTypeName} &nbsp;·&nbsp; {$txnDate}
                             &nbsp;·&nbsp; To: <strong style='color:#fff;'>{$txnTo}</strong>
                             &nbsp;·&nbsp; By: <strong style='color:#fff;'>{$txnBy}</strong>
-                            &nbsp;·&nbsp; <strong style='color:#fff;'>{$totalLines}</strong> line(s)
-                            &nbsp;·&nbsp; <strong style='color:#fff;'>{$totalPcs}</strong> pc(s)
+                            &nbsp;·&nbsp; <strong style='color:#fff;'>{$totalSlips}</strong> slip(s) on <strong style='color:#fff;'>{$pageCount}</strong> A4 page(s)
                         </div>
                     </div>
                     <a
-                        href='{$printUrl}'
+                        href='{$printAllUrl}'
                         target='_blank'
                         style='display:inline-flex;align-items:center;gap:7px;padding:9px 18px;background:#fff;color:#1e3a5f;border-radius:8px;font-size:12px;font-weight:800;text-decoration:none;flex-shrink:0;'
                         onmouseover=\"this.style.opacity='.88'\"
@@ -636,88 +655,198 @@ class UniformIssuancesTable
                 </div>
             "));
 
-        $recipients   = $record->recipients;
-        $recipientCnt = $recipients->count();
+        // ── Section A: Release Batches (mirrors RC modal) ─────────────────────
+        if ($releaseCount > 0) {
 
-        if ($recipientCnt === 0) {
-            $fields[] = \Filament\Forms\Components\Placeholder::make('tx_empty')
-                ->label('')
-                ->columnSpanFull()
-                ->content(new \Illuminate\Support\HtmlString("
-                    <div style='text-align:center;padding:32px 0;color:#9ca3af;font-size:13px;'>
-                        No recipients found for this issuance.
-                    </div>
-                "));
-            return $fields;
-        }
+            foreach ($releaseLogs as $batchIdx => $log) {
+                $batchNo  = $batchIdx + 1;
+                $logDate  = \Carbon\Carbon::parse($log->created_at)->timezone('Asia/Manila')->format('M d, Y h:i A');
+                $logUrl   = url("/transmittal-copy/log/{$log->id}");
+                $snap     = json_decode($log->note, true);
+                $isLast   = $batchIdx === $releaseCount - 1;
+                $isFinal  = $isLast && $record->status === 'issued';
 
-        foreach ($recipients as $idx => $recipient) {
-            $empName  = e($recipient->employee_name ?? 'Unknown Employee');
-            $posName  = e($recipient->position?->name ?? '—');
-            $txnId    = e($recipient->transaction_id ?? '—');
-            $isLast   = $idx === $recipientCnt - 1;
-            $mb       = ($isLast && $changeLogCount === 0) ? '0' : '12px';
+                $cardBorderColor = $isFinal ? '#059669' : '#f59e0b';
+                $cardBgFrom      = $isFinal ? '#ecfdf5' : '#fffbeb';
+                $cardBgTo        = $isFinal ? '#d1fae5' : '#fef3c7';
+                $cardBorderHdr   = $isFinal ? '#a7f3d0' : '#fde68a';
+                $badgeBg         = $isFinal ? '#059669' : '#f59e0b';
+                $badgeLabel      = $isFinal ? "Final Release #{$batchNo}" : "Release #{$batchNo}";
+                $textColor       = $isFinal ? '#065f46' : '#92400e';
+                $subTextColor    = $isFinal ? '#047857' : '#78350f';
+                $btnBg           = $isFinal ? '#059669' : '#f59e0b';
+                $btnHover        = $isFinal ? '#047857' : '#d97706';
+                $mb              = ($batchIdx < $releaseCount - 1 || $changeLogCount > 0) ? '12px' : '0';
 
-            $empTotal     = 0;
-            $itemRowsHtml = '';
+                // Group snapshot rows by employee
+                $byEmployee = [];
+                foreach ($snap as $row) {
+                    $label    = $row['label'] ?? '';
+                    $released = (int) ($row['released'] ?? 0);
+                    if ($released <= 0) continue;
+                    $parts        = explode(' — ', $label, 2);
+                    $itemPart     = trim($parts[0] ?? $label);
+                    $employeeName = trim($parts[1] ?? 'Unknown');
+                    $byEmployee[$employeeName][] = ['item' => $itemPart, 'qty' => $released];
+                }
 
-            foreach ($recipient->items as $ii => $item) {
-                $qty = (int) ($item->released_quantity ?: $item->quantity);
-                if ($qty <= 0) continue;
+                // Per-employee cards with individual print buttons
+                $employeeCards = '';
+                foreach ($byEmployee as $empName => $empItems) {
+                    $safeEmpName = e($empName);
+                    $total       = array_sum(array_column($empItems, 'qty'));
+                    $itemList    = implode('', array_map(
+                        fn ($i) => "<div style='font-size:10px;color:#374151;padding:2px 0;border-bottom:1px solid #f3f4f6;display:flex;justify-content:space-between;'>"
+                                . "<span>" . e($i['item']) . "</span>"
+                                . "<span style='font-weight:700;color:#1d4ed8;'>" . $i['qty'] . "</span>"
+                                . "</div>",
+                        $empItems
+                    ));
 
-                $empTotal  += $qty;
-                $itemName   = e($item->item?->name ?? "Item #{$item->item_id}");
-                $size       = e($item->size ?? '—');
-                $rowBg      = $ii % 2 === 0 ? '#ffffff' : '#f8fafc';
+                    // Find recipient for individual transmittal print link
+                    $recipient    = $record->recipients->first(fn ($r) => strtolower(trim($r->employee_name)) === strtolower($empName));
+                    $indivUrl     = $recipient ? url("/transmittal-copy/recipient/{$recipient->id}") : null;
+                    $indivBtnHtml = $indivUrl
+                        ? "<a href='{$indivUrl}' target='_blank'
+                            style='display:inline-flex;align-items:center;gap:4px;padding:3px 10px;background:#fff;border:1px solid #bfdbfe;border-radius:6px;font-size:10px;font-weight:700;color:#2563eb;text-decoration:none;flex-shrink:0;'
+                            title='Print transmittal for {$safeEmpName}'
+                            onmouseover=\"this.style.background='#eff6ff'\"
+                            onmouseout=\"this.style.background='#fff'\">
+                                <svg width='10' height='10' fill='none' stroke='currentColor' stroke-width='2' viewBox='0 0 24 24'>
+                                    <polyline points='6 9 6 2 18 2 18 9'/>
+                                    <path d='M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2'/>
+                                    <rect x='6' y='14' width='12' height='8'/>
+                                </svg>
+                                Print
+                        </a>"
+                        : '';
 
-                $itemRowsHtml .= "
-                    <div style='
-                        display:flex;justify-content:space-between;align-items:center;
-                        padding:5px 0;border-bottom:1px solid #f1f5f9;background:{$rowBg};
-                    '>
-                        <div style='display:flex;align-items:center;gap:8px;padding:0 12px;flex:1;'>
-                            <div style='width:6px;height:6px;border-radius:50%;background:#6366f1;flex-shrink:0;'></div>
-                            <span style='font-size:11px;font-weight:500;color:#111827;'>{$itemName}</span>
-                        </div>
-                        <div style='display:flex;align-items:center;gap:8px;padding:0 12px;flex-shrink:0;'>
-                            <span style='background:#f1f5f9;border:1px solid #e2e8f0;border-radius:999px;padding:1px 10px;font-size:10px;color:#374151;'>{$size}</span>
-                            <span style='background:#eff6ff;border:1px solid #bfdbfe;border-radius:999px;padding:1px 10px;font-size:12px;font-weight:800;color:#1d4ed8;min-width:32px;text-align:center;'>{$qty}</span>
-                        </div>
-                    </div>
-                ";
-            }
-
-            if (empty($itemRowsHtml)) {
-                $itemRowsHtml = "<div style='padding:10px 12px;font-size:11px;color:#9ca3af;text-align:center;'>No issued items.</div>";
-            }
-
-            $fields[] = \Filament\Forms\Components\Placeholder::make("tx_recipient_{$recipient->id}")
-                ->label('')
-                ->columnSpanFull()
-                ->content(new \Illuminate\Support\HtmlString("
-                    <div style='border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;margin-bottom:{$mb};box-shadow:0 1px 3px rgba(0,0,0,.04);'>
-                        <div style='background:linear-gradient(to right,#f0f4ff,#f8fafc);border-bottom:1px solid #e2e8f0;padding:10px 14px;display:flex;align-items:center;justify-content:space-between;'>
-                            <div>
-                                <div style='font-size:13px;font-weight:700;color:#111827;'>👤 {$empName}</div>
-                                <div style='font-size:10px;color:#6b7280;margin-top:2px;'>
-                                    📌 {$posName} &nbsp;·&nbsp; 🔖 TXN: {$txnId}
+                    $employeeCards .= "
+                        <div style='background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;margin-top:8px;'>
+                            <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;gap:8px;'>
+                                <span style='font-size:12px;font-weight:700;color:#111827;'>👤 {$safeEmpName}</span>
+                                <div style='display:flex;align-items:center;gap:6px;flex-shrink:0;'>
+                                    <span style='background:#ecfdf5;border:1px solid #a7f3d0;border-radius:999px;padding:1px 8px;font-size:10px;font-weight:700;color:#059669;'>{$total} item(s)</span>
+                                    {$indivBtnHtml}
                                 </div>
                             </div>
-                            <span style='background:#ecfdf5;border:1px solid #a7f3d0;border-radius:999px;padding:3px 12px;font-size:11px;font-weight:700;color:#059669;'>{$empTotal} pc(s)</span>
+                            {$itemList}
                         </div>
-                        <div style='background:#1e3a5f;padding:5px 12px;display:flex;justify-content:space-between;'>
-                            <span style='font-size:9px;font-weight:700;color:#fff;text-transform:uppercase;letter-spacing:.05em;'>Item / Description</span>
-                            <div style='display:flex;gap:8px;'>
-                                <span style='font-size:9px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em;width:60px;text-align:center;'>Size</span>
-                                <span style='font-size:9px;font-weight:700;color:#93c5fd;text-transform:uppercase;letter-spacing:.05em;width:48px;text-align:center;'>Qty</span>
+                    ";
+                }
+
+                $empCount = count($byEmployee);
+
+                $fields[] = \Filament\Forms\Components\Placeholder::make("tx_log_{$log->id}")
+                    ->label('')
+                    ->columnSpanFull()
+                    ->content(new \Illuminate\Support\HtmlString("
+                        <div style='border:2px solid {$cardBorderColor};border-radius:10px;overflow:hidden;margin-bottom:{$mb};'>
+                            <div style='background:linear-gradient(to right,{$cardBgFrom},{$cardBgTo});border-bottom:1px solid {$cardBorderHdr};padding:10px 14px;display:flex;align-items:center;justify-content:space-between;'>
+                                <div>
+                                    <div style='display:flex;align-items:center;gap:8px;'>
+                                        <span style='background:{$badgeBg};color:#fff;font-size:10px;font-weight:800;padding:2px 10px;border-radius:999px;'>{$badgeLabel}</span>
+                                        <span style='font-size:11px;color:{$textColor};font-weight:600;'>{$logDate}</span>
+                                    </div>
+                                    <div style='font-size:10px;color:{$subTextColor};margin-top:3px;'>
+                                        By: <strong>{$log->performed_by}</strong>
+                                        &nbsp;·&nbsp; {$empCount} employee(s)
+                                    </div>
+                                </div>
+                                <a
+                                    href='{$logUrl}'
+                                    target='_blank'
+                                    style='display:inline-flex;align-items:center;gap:5px;padding:6px 14px;background:{$btnBg};color:#fff;border-radius:8px;font-size:11px;font-weight:800;text-decoration:none;flex-shrink:0;'
+                                    onmouseover=\"this.style.background='{$btnHover}'\"
+                                    onmouseout=\"this.style.background='{$btnBg}'\"
+                                >
+                                    <svg width='12' height='12' fill='none' stroke='currentColor' stroke-width='2' viewBox='0 0 24 24'>
+                                        <polyline points='6 9 6 2 18 2 18 9'/>
+                                        <path d='M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2'/>
+                                        <rect x='6' y='14' width='12' height='8'/>
+                                    </svg>
+                                    Print {$badgeLabel}
+                                </a>
+                            </div>
+                            <div style='padding:10px 14px;'>
+                                {$employeeCards}
                             </div>
                         </div>
-                        <div>{$itemRowsHtml}</div>
-                    </div>
-                "));
+                    "));
+            }
+
+        } else {
+            // No release logs yet — fall back to showing recipients (same as RC modal)
+            $record->loadMissing('recipients.position', 'recipients.items.item');
+
+            foreach ($record->recipients as $idx => $recipient) {
+                $emp    = e($recipient->employee_name ?? '—');
+                $pos    = e($recipient->position?->name ?? '—');
+                $txnId  = e($recipient->transaction_id ?? '—');
+                $recUrl = url("/transmittal-copy/recipient/{$recipient->id}");
+                $mb     = ($idx < $record->recipients->count() - 1 || $changeLogCount > 0) ? '10px' : '0';
+
+                $itemPreview = '';
+                $total       = 0;
+                foreach ($recipient->items as $i => $item) {
+                    $n    = e($item->item?->name ?? "Item #{$item->item_id}");
+                    $s    = e($item->size ?? '—');
+                    $q    = (int) ($item->released_quantity ?: $item->quantity);
+                    $total += $q;
+                    $bg   = $i % 2 === 0 ? '#ffffff' : '#f8fafc';
+                    $itemPreview .= "
+                        <tr style='background:{$bg};'>
+                            <td style='padding:4px 10px;font-size:11px;color:#111827;font-weight:500;border-bottom:1px solid #f1f5f9;'>{$n}</td>
+                            <td style='padding:4px 10px;font-size:11px;color:#475569;text-align:center;border-bottom:1px solid #f1f5f9;'>
+                                <span style='background:#f1f5f9;border-radius:999px;padding:1px 8px;font-size:10px;'>{$s}</span>
+                            </td>
+                            <td style='padding:4px 10px;font-size:12px;font-weight:800;color:#1d4ed8;text-align:center;border-bottom:1px solid #f1f5f9;'>{$q}</td>
+                        </tr>
+                    ";
+                }
+
+                $fields[] = \Filament\Forms\Components\Placeholder::make("tx_rec_{$recipient->id}")
+                    ->label('')
+                    ->columnSpanFull()
+                    ->content(new \Illuminate\Support\HtmlString("
+                        <div style='border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;margin-bottom:{$mb};'>
+                            <div style='background:linear-gradient(to right,#f0f4ff,#f8fafc);border-bottom:1px solid #e2e8f0;padding:10px 14px;display:flex;align-items:center;justify-content:space-between;'>
+                                <div>
+                                    <div style='font-size:13px;font-weight:700;color:#111827;'>{$emp}</div>
+                                    <div style='font-size:10px;color:#6b7280;margin-top:1px;'>📌 {$pos} &nbsp;·&nbsp; 🔖 TXN: {$txnId}</div>
+                                </div>
+                                <div style='display:flex;align-items:center;gap:8px;'>
+                                    <span style='background:#ecfdf5;border:1px solid #a7f3d0;border-radius:999px;padding:2px 10px;font-size:10px;font-weight:700;color:#059669;'>{$total} item(s)</span>
+                                    <a href='{$recUrl}' target='_blank'
+                                        style='display:inline-flex;align-items:center;gap:5px;padding:5px 12px;background:#fff;border:1px solid #c7d2fe;border-radius:7px;font-size:10px;font-weight:700;color:#4f46e5;text-decoration:none;'
+                                        onmouseover=\"this.style.background='#eef2ff'\"
+                                        onmouseout=\"this.style.background='#fff'\"
+                                    >
+                                        <svg width='11' height='11' fill='none' stroke='currentColor' stroke-width='2' viewBox='0 0 24 24'>
+                                            <polyline points='6 9 6 2 18 2 18 9'/>
+                                            <path d='M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2'/>
+                                            <rect x='6' y='14' width='12' height='8'/>
+                                        </svg>
+                                        Print
+                                    </a>
+                                </div>
+                            </div>
+                            <table style='width:100%;border-collapse:collapse;'>
+                                <thead>
+                                    <tr style='background:#1e3a5f;'>
+                                        <th style='padding:6px 10px;text-align:left;font-size:9px;font-weight:700;color:#fff;text-transform:uppercase;'>Item</th>
+                                        <th style='padding:6px 10px;text-align:center;font-size:9px;font-weight:700;color:#93c5fd;text-transform:uppercase;width:70px;'>Size</th>
+                                        <th style='padding:6px 10px;text-align:center;font-size:9px;font-weight:700;color:#93c5fd;text-transform:uppercase;width:55px;'>Qty</th>
+                                    </tr>
+                                </thead>
+                                <tbody>{$itemPreview}</tbody>
+                            </table>
+                        </div>
+                    "));
+            }
         }
 
-        // ── Grand total footer ────────────────────────────────────────────────────
+        // ── Grand Total Footer ────────────────────────────────────────────────
         $fields[] = \Filament\Forms\Components\Placeholder::make('tx_totals')
             ->label('')
             ->columnSpanFull()
@@ -740,14 +869,14 @@ class UniformIssuancesTable
                 </div>
             "));
 
-        // ── Section B: Amendment Transmittals ─────────────────────────────────────
+        // ── Section B: Amendment Transmittals (mirrors RC Item Changes section) ──
         if ($changeLogCount > 0) {
 
             $fields[] = \Filament\Forms\Components\Placeholder::make('tx_amendment_divider')
                 ->label('')
                 ->columnSpanFull()
                 ->content(new \Illuminate\Support\HtmlString("
-                    <div style='display:flex;align-items:center;gap:10px;margin:4px 0;'>
+                    <div style='display:flex;align-items:center;gap:10px;margin:8px 0 4px;'>
                         <div style='flex:1;height:2px;background:linear-gradient(to right,#f59e0b,transparent);'></div>
                         <span style='
                             background:#fef3c7;border:1.5px solid #f59e0b;
@@ -757,41 +886,68 @@ class UniformIssuancesTable
                         '>🔄 AMENDMENT TRANSMITTALS</span>
                         <div style='flex:1;height:2px;background:linear-gradient(to left,#f59e0b,transparent);'></div>
                     </div>
-                    <div style='font-size:11px;color:#78350f;background:#fef3c7;border:1px solid #fde68a;border-radius:8px;padding:8px 12px;margin-top:8px;'>
-                        ℹ️ The <strong>original transmittal #{$txnNo}</strong> remains valid. These amendment transmittals cover only the changed items.
-                        You can print the full updated transmittal or just the changed items.
+                    <div style='font-size:11px;color:#78350f;background:#fef3c7;border:1px solid #fde68a;border-radius:8px;padding:8px 12px;margin-top:8px;margin-bottom:4px;'>
+                        ℹ️ The <strong>original transmittal" . ($txnNo ? " #{$txnNo}" : '') . "</strong> remains valid. These amendment transmittals cover only the changed items.
                     </div>
                 "));
 
             foreach ($changeLogs as $chIdx => $log) {
-                $logDate        = \Carbon\Carbon::parse($log->created_at)->timezone('Asia/Manila')->format('M d, Y h:i A');
-                $snap           = json_decode($log->note, true);
-                $isLast         = $chIdx === $changeLogCount - 1;
-                $mb             = $isLast ? '0' : '12px';
-                $amendNo        = $chIdx + 1;
+                $logDate  = \Carbon\Carbon::parse($log->created_at)->timezone('Asia/Manila')->format('M d, Y h:i A');
+                $snap     = json_decode($log->note, true);
+                $isLast   = $chIdx === $changeLogCount - 1;
+                $mb       = $isLast ? '0' : '12px';
+                $amendNo  = $chIdx + 1;
 
-                $changedOnlyUrl  = url("/transmittal-copy/log/{$log->id}/changed-only");
-                $fullUpdatedUrl  = url("/transmittal-copy/log/{$log->id}/full-updated");
+                $changedOnlyUrl = url("/transmittal-copy/log/{$log->id}/changed-only");
+                $fullUpdatedUrl = url("/transmittal-copy/log/{$log->id}/full-updated");
 
-                $empChangeRows = '';
+                // Per-employee change cards (mirrors RC change cards)
+                $changeCards = '';
                 foreach ($snap as $row) {
                     $empName   = e(trim($row['label'] ?? 'Unknown'));
                     $fromLabel = e($row['_from'] ?? '—');
                     $toLabel   = e($row['_to'] ?? '—');
 
-                    $empChangeRows .= "
-                        <div style='
-                            background:#fff;border:1px solid #fde68a;border-radius:8px;
-                            padding:10px 12px;margin-top:8px;
-                        '>
-                            <div style='font-size:12px;font-weight:700;color:#111827;margin-bottom:6px;'>👤 {$empName}</div>
+                    $recipient = $record->recipients->first(fn ($r) => strtolower(trim($r->employee_name)) === strtolower($row['label'] ?? ''));
+                    $indivUrl  = $recipient ? url("/transmittal-copy/recipient/{$recipient->id}") : null;
+
+                    $changeCards .= "
+                        <div style='background:#fff;border:1px solid #fde68a;border-radius:8px;padding:10px 12px;margin-top:8px;'>
+                            <div style='display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:6px;'>
+                                <span style='font-size:12px;font-weight:700;color:#111827;'>👤 {$empName}</span>
+                                <div style='display:flex;gap:5px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end;'>
+                                    " . ($indivUrl ? "
+                                    <a href='{$indivUrl}' target='_blank'
+                                        style='display:inline-flex;align-items:center;gap:4px;padding:3px 9px;background:#f0fdf4;border:1px solid #a7f3d0;border-radius:6px;font-size:10px;font-weight:700;color:#059669;text-decoration:none;'
+                                        title='Print full updated transmittal for {$empName}'
+                                        onmouseover=\"this.style.background='#dcfce7'\"
+                                        onmouseout=\"this.style.background='#f0fdf4'\">
+                                        <svg width='10' height='10' fill='none' stroke='currentColor' stroke-width='2' viewBox='0 0 24 24'>
+                                            <polyline points='6 9 6 2 18 2 18 9'/>
+                                            <path d='M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2'/>
+                                            <rect x='6' y='14' width='12' height='8'/>
+                                        </svg>
+                                        Full Transmittal
+                                    </a>" : '') . "
+                                    <a href='{$changedOnlyUrl}' target='_blank'
+                                        style='display:inline-flex;align-items:center;gap:4px;padding:3px 9px;background:#fef3c7;border:1px solid #f59e0b;border-radius:6px;font-size:10px;font-weight:700;color:#92400e;text-decoration:none;'
+                                        title='Print amendment (changed item only)'
+                                        onmouseover=\"this.style.background='#fde68a'\"
+                                        onmouseout=\"this.style.background='#fef3c7'\">
+                                        <svg width='10' height='10' fill='none' stroke='currentColor' stroke-width='2' viewBox='0 0 24 24'>
+                                            <path stroke-linecap='round' stroke-linejoin='round' d='M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z'/>
+                                        </svg>
+                                        Changed Item Only
+                                    </a>
+                                </div>
+                            </div>
                             <div style='display:flex;flex-direction:column;gap:4px;'>
                                 <div style='display:flex;align-items:center;gap:6px;'>
-                                    <span style='font-size:10px;font-weight:700;color:#9ca3af;width:40px;'>BEFORE:</span>
-                                    <span style='background:#fef2f2;border:1px solid #fecaca;border-radius:6px;padding:2px 10px;font-size:11px;color:#dc2626;text-decoration:line-through;'>{$fromLabel}</span>
+                                    <span style='font-size:10px;font-weight:700;color:#9ca3af;width:36px;text-align:right;'>WAS:</span>
+                                    <span style='background:#fef2f2;border:1px solid #fecaca;border-radius:6px;padding:2px 10px;font-size:11px;color:#dc2626;font-weight:600;text-decoration:line-through;'>{$fromLabel}</span>
                                 </div>
                                 <div style='display:flex;align-items:center;gap:6px;'>
-                                    <span style='font-size:10px;font-weight:700;color:#9ca3af;width:40px;'>AFTER:</span>
+                                    <span style='font-size:10px;font-weight:700;color:#9ca3af;width:36px;text-align:right;'>NOW:</span>
                                     <span style='background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:2px 10px;font-size:11px;color:#16a34a;font-weight:700;'>{$toLabel}</span>
                                 </div>
                             </div>
@@ -845,7 +1001,7 @@ class UniformIssuancesTable
                                 </div>
                             </div>
                             <div style='padding:10px 14px;background:#fffbeb;'>
-                                {$empChangeRows}
+                                {$changeCards}
                             </div>
                         </div>
                     "));

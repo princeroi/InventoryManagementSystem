@@ -17,6 +17,7 @@ class Department extends Model
         return Attribute::get(fn ($value) => match ($this->slug) {
             'hr'  => 'Uniform Inventory',
             'operation' => 'SME Inventory',
+            'officesupply' => 'Office Supply Inventory',
             default => $value,
         });
     }

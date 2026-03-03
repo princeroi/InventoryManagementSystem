@@ -4,16 +4,21 @@ namespace App\Filament\Resources\Roles;
 
 use Althinect\FilamentSpatieRolesPermissions\Resources\RoleResource as BaseRoleResource;
 use App\Filament\Resources\Roles\Pages\ManageRoles;
+use Filament\Actions\EditAction;
+use Filament\Actions\ViewAction;
+use Filament\Actions\CreateAction;
+use Filament\Actions\BulkActionGroup;
+use Filament\Actions\DeleteBulkAction;
 use Filament\Forms\Components\CheckboxList;
 use Filament\Forms\Components\Toggle;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\Placeholder;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Grid;
-use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Components\Utilities\Set;
 use Filament\Schemas\Schema;
 use Filament\Support\Icons\Heroicon;
+use Filament\Tables\Table;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\HtmlString;
 use Illuminate\Support\Str;
@@ -47,7 +52,7 @@ class RoleResource extends BaseRoleResource
     // Permission groups — hardcoded DB IDs, spec table order
     // -------------------------------------------------------------------------
 
-    private const PERMISSION_GROUPS = [
+    public const PERMISSION_GROUPS = [
 
         'Uniform Inventory' => [
             'icon'        => 'heroicon-o-archive-box',
@@ -101,6 +106,61 @@ class RoleResource extends BaseRoleResource
     ];
 
     // -------------------------------------------------------------------------
+    // Table — preserve parent columns, replace actions with custom EditAction
+    // that wires ->using() so permissions are synced on save.
+    //
+    // Uses \Filament\Actions\EditAction (confirmed from base package source).
+    // -------------------------------------------------------------------------
+
+    public static function table(Table $table): Table
+    {
+        return $table
+            ->columns([
+                \Filament\Tables\Columns\TextColumn::make('id')
+                    ->label('ID')
+                    ->searchable(),
+                \Filament\Tables\Columns\TextColumn::make('name')
+                    ->label('Name')
+                    ->searchable(),
+                \Filament\Tables\Columns\TextColumn::make('permissions_count')
+                    ->counts('permissions')
+                    ->label('Permissions'),
+                \Filament\Tables\Columns\TextColumn::make('guard_name')
+                    ->label('Guard')
+                    ->searchable(),
+            ])
+            ->filters([])
+            ->actions([
+                // ── EditAction with custom ->using() to sync permissions ──────
+                EditAction::make()
+                    ->using(function ($record, array $data): mixed {
+                        $permissionIds = ManageRoles::extractPermissionIdsFromData($data);
+
+                        ManageRoles::validateUniqueRoleName(
+                            name:      $data['name'],
+                            guard:     $data['guard_name'] ?? 'web',
+                            excludeId: $record->id,
+                        );
+
+                        $record->update($data);
+
+                        $record->syncPermissions(
+                            Permission::whereIn('id', $permissionIds)->get()
+                        );
+
+                        return $record;
+                    }),
+
+                ViewAction::make(),
+            ])
+            ->bulkActions([
+                BulkActionGroup::make([
+                    DeleteBulkAction::make(),
+                ]),
+            ]);
+    }
+
+    // -------------------------------------------------------------------------
     // Form
     // -------------------------------------------------------------------------
 
@@ -142,12 +202,6 @@ class RoleResource extends BaseRoleResource
                             ->required()
                             ->maxLength(255),
                     ]),
-
-                    // Hidden field — stores selected permission IDs, saved manually in ManageRoles
-                    CheckboxList::make('permissions')
-                        ->options(Permission::pluck('name', 'id')->toArray())
-                        ->hidden()
-                        ->dehydrated(true),
                 ]),
 
             // ── Master Permission Toggle ──────────────────────────────────────
@@ -185,8 +239,6 @@ class RoleResource extends BaseRoleResource
                             $component->state($savedCount > 0 && $savedCount === $totalCount);
                         })
                         ->afterStateUpdated(function (bool $state, Set $set): void {
-                            $allIds = Permission::pluck('id')->toArray();
-                            $set('permissions', $state ? $allIds : []);
                             foreach (self::PERMISSION_GROUPS as $label => $config) {
                                 $slug = Str::slug($label);
                                 $set('group_' . $slug, $state ? $config['ids'] : []);
@@ -271,7 +323,6 @@ class RoleResource extends BaseRoleResource
                         ->label('')
                         ->content(new HtmlString($headerHtml)),
 
-                    // ── Per-group Select All toggle ───────────────────────────
                     Toggle::make('select_all_' . $slugLabel)
                         ->label('Select All — ' . $label)
                         ->helperText('Toggle all ' . $count . ' permissions in this group.')
@@ -290,21 +341,11 @@ class RoleResource extends BaseRoleResource
                                 && count(array_intersect($groupIds, $savedIds)) === count($groupIds);
                             $component->state($allSelected);
                         })
-                        ->afterStateUpdated(function (bool $state, Set $set, Get $get) use ($fieldKey, $groupIds): void {
-                            // Flip the group checkboxlist
+                        ->afterStateUpdated(function (bool $state, Set $set) use ($fieldKey, $groupIds): void {
                             $set($fieldKey, $state ? $groupIds : []);
-
-                            // Sync into the hidden permissions field
-                            $current = (array) ($get('permissions') ?? []);
-                            $current = array_values(array_diff($current, $groupIds));
-                            $merged  = $state
-                                ? array_values(array_unique(array_merge($current, $groupIds)))
-                                : $current;
-                            $set('permissions', $merged);
                         })
                         ->dehydrated(false),
 
-                    // ── Checkboxes ────────────────────────────────────────────
                     CheckboxList::make($fieldKey)
                         ->label('')
                         ->options($options)
@@ -318,20 +359,13 @@ class RoleResource extends BaseRoleResource
                             $component->state(array_values(array_intersect($savedIds, $groupOptIds)));
                         })
                         ->live()
-                        ->afterStateUpdated(function (array $state, Set $set, Get $get) use ($groupIds, $slugLabel): void {
-                            // Sync into hidden permissions field
-                            $current = (array) ($get('permissions') ?? []);
-                            $current = array_values(array_diff($current, $groupIds));
-                            $merged  = array_values(array_unique(array_merge($current, $state)));
-                            $set('permissions', $merged);
-
-                            // Keep the per-group toggle in sync
+                        ->afterStateUpdated(function (array $state, Set $set) use ($groupIds, $slugLabel): void {
                             $set('select_all_' . $slugLabel, count($state) === count($groupIds));
                         })
                         ->bulkToggleable()
                         ->columns(3)
                         ->gridDirection('row')
-                        ->dehydrated(false),
+                        ->dehydrated(true),
                 ]);
         }
 

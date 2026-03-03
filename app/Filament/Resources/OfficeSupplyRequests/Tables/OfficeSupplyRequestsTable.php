@@ -3,6 +3,7 @@
 namespace App\Filament\Resources\OfficeSupplyRequests\Tables;
 
 use App\Models\OfficeSupplyRequest;
+use App\Notifications\OfficeSupplyRequestedNotification;
 use Filament\Notifications\Notification;
 use Filament\Actions\Action;
 use Filament\Actions\BulkActionGroup;
@@ -14,6 +15,7 @@ use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Filament\Schemas\Schema;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Grid;
@@ -225,6 +227,15 @@ class OfficeSupplyRequestsTable
                         ->modalIcon('heroicon-o-check-badge')
                         ->action(function (OfficeSupplyRequest $record) {
                             $record->update(['status' => 'completed']);
+
+                            // ── Clear all related notifications for this request ──
+                            $ref = str_pad($record->id, 6, '0', STR_PAD_LEFT);
+
+                            DB::table('notifications')
+                                ->where('type', OfficeSupplyRequestedNotification::class)
+                                ->where('data->body', 'like', "%Ref #{$ref}%")
+                                ->delete();
+
                             Notification::make()
                                 ->title('Request tagged as completed')
                                 ->success()

@@ -13,14 +13,12 @@ class TransmittalService
     private const COMPANY_DEPT    = 'HR DEPARTMENT';
     private const COMPANY_ADDRESS = 'RL Bldg., Francisco Village, Brgy. Pulong Sta. Cruz, Santa Rosa, Laguna 4026';
     private const COMPANY_PHONE   = 'Tel no.: (049) 539-3215';
+    private const COMPANY_LOGO    = '/images/logo.png';
 
     // ─────────────────────────────────────────────────────────────────────────
     // PUBLIC ENTRY POINTS
     // ─────────────────────────────────────────────────────────────────────────
 
-    /**
-     * Print transmittal from a Transmittal record.
-     */
     public static function generateFromTransmittal(Transmittal $transmittal): string
     {
         $transmittal->loadMissing(
@@ -33,9 +31,6 @@ class TransmittalService
         return self::wrapDocument([$data], "Transmittal #{$transmittal->transmittal_number}");
     }
 
-    /**
-     * Print transmittal from an issuance (uses its linked transmittal).
-     */
     public static function generateFromIssuance(UniformIssuance $issuance): string
     {
         $issuance->loadMissing(
@@ -53,8 +48,6 @@ class TransmittalService
      * Print ALL transmittals for an issuance:
      *   Page 1   = original transmittal
      *   Page 2+  = one page per item_changed log (changed items only)
-     *
-     * This is what "Print All" should call.
      */
     public static function generateAllFromIssuance(UniformIssuance $issuance): string
     {
@@ -113,7 +106,7 @@ class TransmittalService
             if (empty($rows)) continue;
 
             $pages[] = [
-                'transmittal_number' => $txnNo . '-AMD',
+                'transmittal_number' => $txnNo,
                 'transmitted_by'     => $txn?->transmitted_by ?? (auth()->user()?->name ?? '—'),
                 'transmitted_to'     => $txn?->transmitted_to ?? $issuance->transmitted_to ?? '—',
                 'issuance_type'      => $issuance->issuanceType?->name ?? '—',
@@ -134,8 +127,6 @@ class TransmittalService
 
     /**
      * Amendment transmittal from an item_changed log (single page).
-     * $changedItemsOnly = true  → only changed item rows
-     * $changedItemsOnly = false → full current transmittal rows
      */
     public static function generateAmendmentFromLog(
         UniformIssuanceLog $log,
@@ -186,7 +177,7 @@ class TransmittalService
             }
 
             $data = [
-                'transmittal_number' => $txnNo . '-AMD',
+                'transmittal_number' => $txnNo,
                 'transmitted_by'     => $txn?->transmitted_by ?? (auth()->user()?->name ?? '—'),
                 'transmitted_to'     => $txn?->transmitted_to ?? $issuance->transmitted_to ?? '—',
                 'issuance_type'      => $issuance->issuanceType?->name ?? '—',
@@ -196,15 +187,15 @@ class TransmittalService
                 'rows'               => $rows,
             ];
 
-            return self::wrapDocument([$data], "Transmittal #{$txnNo}-AMD");
+            return self::wrapDocument([$data], "Transmittal #{$txnNo}");
         }
 
         // Full current transmittal rows
         $data                       = self::buildDataFromIssuance($issuance);
-        $data['transmittal_number'] = $txnNo . '-AMD';
+        $data['transmittal_number'] = $txnNo;
         $data['date']               = $logDate;
 
-        return self::wrapDocument([$data], "Transmittal #{$txnNo}-AMD");
+        return self::wrapDocument([$data], "Transmittal #{$txnNo}");
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -286,7 +277,7 @@ class TransmittalService
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // RENDERER — one format only, always blue #1a237e
+    // RENDERER
     // ─────────────────────────────────────────────────────────────────────────
 
     private static function renderPage(array $d): string
@@ -305,6 +296,7 @@ class TransmittalService
         $dept    = e(self::COMPANY_DEPT);
         $addr    = e(self::COMPANY_ADDRESS);
         $phone   = e(self::COMPANY_PHONE);
+        $logo    = e(self::COMPANY_LOGO);
 
         $itemRows = '';
         $MIN_ROWS = 12;
@@ -339,9 +331,8 @@ class TransmittalService
 
     <!-- ════ COMPANY HEADER ════ -->
     <div class="co-header">
-        <div class="co-logo">
-            <div class="logo-top">STRONG<span>LINK</span></div>
-            <div class="logo-bottom">— SERVICES —</div>
+        <div class="co-logo-wrap">
+            <img src="{$logo}" alt="{$cn}" class="co-logo-img">
         </div>
         <div class="co-tagline">{$tagline}</div>
     </div>
@@ -429,7 +420,7 @@ HTML;
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // HTML DOCUMENT WRAPPER — supports multiple A4 pages
+    // HTML DOCUMENT WRAPPER
     // ─────────────────────────────────────────────────────────────────────────
 
     private static function wrapDocument(array $pages, string $title): string
@@ -492,12 +483,23 @@ body{font-family:Arial,sans-serif;background:#d1d9e6;color:#000;}
     border:1.5px dashed #b0bec5;box-sizing:border-box;
 }
 
-.co-header{text-align:center;flex-shrink:0;padding-bottom:2mm;border-bottom:1px solid #ccc;}
-.co-logo{display:inline-flex;flex-direction:column;align-items:center;margin-bottom:1mm;}
-.logo-top{font-size:20pt;font-weight:900;letter-spacing:.08em;color:#1a237e;line-height:1;font-family:Arial,sans-serif;}
-.logo-top span{color:#1565c0;}
-.logo-bottom{font-size:8pt;color:#555;letter-spacing:.2em;margin-top:0;}
-.co-tagline{font-size:9.5pt;color:#333;margin-top:1mm;}
+/* ── LOGO HEADER ── */
+.co-header{
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    gap:0;
+    padding:2mm 0 2mm;border-bottom:2.5px solid #1e3a5f;
+    flex-shrink:0;margin-bottom:0;text-align:center;
+}
+.co-logo-wrap{
+    width:220px;height:90px;
+    flex-shrink:0;overflow:hidden;
+    display:flex;align-items:center;justify-content:center;
+}
+.co-logo-img{
+    width:100%;height:100%;object-fit:contain;display:block;
+    -webkit-print-color-adjust:exact;print-color-adjust:exact;
+}
+.co-tagline{font-size:8.5pt;color:#475569;text-align:center;letter-spacing:.01em;margin-top:-8px;line-height:1;}
 
 .dept-row{width:100%;border-collapse:collapse;border:1.5px solid #000;border-top:none;flex-shrink:0;}
 .dept-row td{padding:2.5mm 3mm;border:1px solid #000;vertical-align:middle;background:#1a237e;color:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
@@ -547,6 +549,7 @@ body{font-family:Arial,sans-serif;background:#d1d9e6;color:#000;}
     .pages{padding:0;gap:0;background:#fff;}
     .a4{width:210mm;height:297mm;box-shadow:none;border-radius:0;}
     .page{border-color:#b0bec5;}
+    .co-logo-img{-webkit-print-color-adjust:exact;print-color-adjust:exact;}
     .col-header th,.dept-row,.meta-table,.items-table,.bottom-table{-webkit-print-color-adjust:exact;print-color-adjust:exact;}
 }
 </style>

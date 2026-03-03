@@ -13,6 +13,7 @@ class ReceivingCopyService
     private const COMPANY_NAME_FULL = 'Stronglink Services Inc.';
     private const COMPANY_ADDRESS   = 'RL Bldg. Francisco Village, Brgy. Pulong Sta. Cruz, Sta. Rosa, Laguna';
     private const COMPANY_PHONE     = '(049) 543-9544';
+    private const COMPANY_LOGO      = '/images/logo.png'; // ← update filename if different
 
     // ─────────────────────────────────────────────────────────────────────────
     // PUBLIC ENTRY POINTS
@@ -59,8 +60,6 @@ class ReceivingCopyService
 
     /**
      * Item-changed log — receiving copy showing only the changed item(s) for one employee.
-     * $onlyChangedItems = true → print only the changed items row
-     * $onlyChangedItems = false → print the full current RC for that employee
      */
     public static function generateFromItemChangedLog(
         UniformIssuanceLog $log,
@@ -85,16 +84,13 @@ class ReceivingCopyService
             $fromLabel    = $row['_from'] ?? null;
             $toLabel      = $row['_to'] ?? null;
 
-            // Find the recipient for this employee
             $recipient = $issuance->recipients->first(
                 fn ($r) => strtolower(trim($r->employee_name)) === strtolower($employeeName)
             );
 
             if ($onlyChangedItems) {
-                // Only show the changed item in the slip
                 $items = [];
                 if ($toLabel) {
-                    // Parse "ItemName (Size) × Qty" from _to label
                     if (preg_match('/^(.+?)\s*\(([^)]+)\)\s*×\s*(\d+)$/', $toLabel, $m)) {
                         $items[] = ['name' => trim($m[1]), 'size' => trim($m[2]), 'qty' => (int) $m[3]];
                     } else {
@@ -115,7 +111,6 @@ class ReceivingCopyService
                     'is_amendment'     => true,
                 ];
             } else {
-                // Full RC for that employee based on current items
                 if ($recipient) {
                     $slips[] = self::buildSlipFromRecipient($issuance, $recipient);
                 }
@@ -130,9 +125,7 @@ class ReceivingCopyService
     }
 
     /**
-     * All release logs for one issuance — one document with ALL batches,
-     * including item-change receipts (changed-item slips appended at the end).
-     * This is what "Print All Slips" produces.
+     * All release logs for one issuance — one document with ALL batches.
      */
     public static function generateAllLogs(UniformIssuance $issuance): string
     {
@@ -141,7 +134,6 @@ class ReceivingCopyService
         $isSalaryDeduct = (bool) $issuance->issuanceType?->is_salary_deduct;
         $slips          = [];
 
-        // ── 1. Release slips (partial / issued logs) ──────────────────────────
         $releaseLogs = $issuance->logs
             ->whereIn('action', ['partial', 'issued'])
             ->filter(fn ($log) => ! empty($log->note) && self::isJsonSnapshot($log->note))
@@ -154,14 +146,12 @@ class ReceivingCopyService
             }
         }
 
-        // Fallback: no release log snapshots → use current recipient items
         if (empty($slips)) {
             foreach ($issuance->recipients as $rec) {
                 $slips[] = self::buildSlipFromRecipient($issuance, $rec);
             }
         }
 
-        // ── 2. Item-change receipt slips (one per employee per change log) ────
         $changeLogs = $issuance->logs
             ->where('action', 'item_changed')
             ->filter(fn ($log) => ! empty($log->note) && self::isJsonSnapshot($log->note))
@@ -180,7 +170,6 @@ class ReceivingCopyService
                 $toLabel      = $row['_to'] ?? null;
                 $newQty       = (int) ($row['released'] ?? 0);
 
-                // Parse "ItemName (Size) × Qty" from the _to label
                 $items = [];
                 if ($toLabel) {
                     if (preg_match('/^(.+?)\s*\(([^)]+)\)\s*×\s*(\d+)$/', $toLabel, $m)) {
@@ -217,7 +206,7 @@ class ReceivingCopyService
     }
 
     /**
-     * Bulk across multiple issuances — all recipients + change receipts, 2 slips per A4 page.
+     * Bulk across multiple issuances — all recipients + change receipts.
      */
     public static function generateBulk(iterable $issuances): string
     {
@@ -229,7 +218,6 @@ class ReceivingCopyService
             $isSalaryDeduct = (bool) $issuance->issuanceType?->is_salary_deduct;
             $isPartial      = $issuance->status === 'partial';
 
-            // ── Release slips ─────────────────────────────────────────────────
             if ($isPartial) {
                 $releaseLogs = $issuance->logs
                     ->whereIn('action', ['partial', 'issued'])
@@ -259,7 +247,6 @@ class ReceivingCopyService
                 }
             }
 
-            // ── Item-change receipt slips ─────────────────────────────────────
             $changeLogs = $issuance->logs
                 ->where('action', 'item_changed')
                 ->filter(fn ($log) => ! empty($log->note) && self::isJsonSnapshot($log->note))
@@ -430,6 +417,7 @@ class ReceivingCopyService
         $cn           = e(self::COMPANY_NAME);
         $addr         = e(self::COMPANY_ADDRESS);
         $phone        = e(self::COMPANY_PHONE);
+        $logo         = e(self::COMPANY_LOGO);
 
         // Item rows + filler
         $itemRows   = '';
@@ -467,7 +455,9 @@ class ReceivingCopyService
             <!-- HEADER -->
             <div class='slip-head' style='border-bottom-color:#1e3a5f;'>
                 <div class='slip-brand'>
-                    
+                    <div class='slip-logo'>
+                        <img src='{$logo}' alt='{$cn}' style='width:100%;height:100%;object-fit:contain;display:block;'>
+                    </div>
                     <div>
                         <div class='brand-name'>{$cn}</div>
                         <div class='brand-addr'>{$addr}</div>
@@ -572,6 +562,7 @@ class ReceivingCopyService
         $cnFull       = e(self::COMPANY_NAME_FULL);
         $addr         = e(self::COMPANY_ADDRESS);
         $phone        = e(self::COMPANY_PHONE);
+        $logo         = e(self::COMPANY_LOGO);
 
         $itemDescriptions = collect($d['items'])->map(fn ($i) =>
             e($i['name']) . ' (' . e($i['size']) . ')'
@@ -580,17 +571,15 @@ class ReceivingCopyService
         return "
         <div class='slip atd-slip'>
             <div class='atd-head'>
-                <div class='slip-logo' style='width:38px;height:38px;'>
-                    <svg width='22' height='22' viewBox='0 0 24 24' fill='none' stroke='#fff' stroke-width='1.6'>
-                        <path d='M12 2L2 7l10 5 10-5-10-5z'/><path d='M2 17l10 5 10-5'/><path d='M2 12l10 5 10-5'/>
-                    </svg>
+                <div class='atd-logo'>
+                    <img src='{$logo}' alt='{$cn}' style='width:100%;height:100%;object-fit:contain;display:block;'>
                 </div>
                 <div style='text-align:center;flex:1;'>
                     <div style='font-size:13px;font-weight:900;color:#1e3a5f;letter-spacing:.05em;text-transform:uppercase;'>{$cn}</div>
                     <div style='font-size:8px;color:#64748b;margin-top:1px;'>{$addr}</div>
                     <div style='font-size:8px;color:#64748b;'>Tel: {$phone}</div>
                 </div>
-                <div style='width:38px;'></div>
+                <div style='width:56px;'></div>
             </div>
             <div class='atd-title-wrap'>
                 <div class='atd-title'>AUTHORITY TO DEDUCT</div>
@@ -704,11 +693,11 @@ class ReceivingCopyService
 
     private static function wrapDocument(array $slips, string $title, bool $isSalaryDeduct = false): string
     {
-        $count   = count($slips);
-        $pages          = self::buildPages($slips, $isSalaryDeduct);
-        $genTime        = now()->timezone('Asia/Manila')->format('M d, Y h:i A');
-        $safeTitle      = e($title);
-        $atdNote = $isSalaryDeduct ? " &nbsp;+&nbsp; {$count} ATD slip(s)" : '';
+        $count     = count($slips);
+        $pages     = self::buildPages($slips, $isSalaryDeduct);
+        $genTime   = now()->timezone('Asia/Manila')->format('M d, Y h:i A');
+        $safeTitle = e($title);
+        $atdNote   = $isSalaryDeduct ? " &nbsp;+&nbsp; {$count} ATD slip(s)" : '';
 
         return <<<HTML
 <!DOCTYPE html>
@@ -753,7 +742,19 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#dde3ea;color:#111827;}
 .slip{width:100%;padding:6mm 8mm 4mm;display:flex;flex-direction:column;gap:0;overflow:hidden;flex-shrink:0;}
 .slip-head{display:flex;align-items:flex-start;justify-content:space-between;padding-bottom:5px;border-bottom:2.5px solid #1e3a5f;margin-bottom:4px;flex-shrink:0;}
 .slip-brand{display:flex;align-items:center;gap:9px;}
-.slip-logo{width:42px;height:42px;background:#1e3a5f;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+
+/* ── LOGO — same size slot, no dark background ── */
+.slip-logo{
+    width:56px;height:56px;
+    flex-shrink:0;overflow:hidden;border-radius:6px;
+    display:flex;align-items:center;justify-content:center;
+}
+.atd-logo{
+    width:56px;height:56px;
+    flex-shrink:0;overflow:hidden;border-radius:6px;
+    display:flex;align-items:center;justify-content:center;
+}
+
 .brand-name{font-size:13px;font-weight:900;color:#1e3a5f;letter-spacing:.04em;text-transform:uppercase;}
 .brand-addr{font-size:8.5px;color:#64748b;margin-top:1px;font-weight:500;}
 .brand-phone{font-size:8.5px;color:#64748b;}
@@ -808,7 +809,8 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#dde3ea;color:#111827;}
     .pages{padding:0;gap:0;background:#fff;}
     .a4{width:210mm;height:297mm;box-shadow:none;border-radius:0;}
     .page-half{height:148.5mm;}
-    .slip-logo,.slip-head,.th-dark,tfoot tr,.atd-head{-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+    .slip-logo img,.atd-logo img{-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+    .slip-head,.th-dark,tfoot tr,.atd-head{-webkit-print-color-adjust:exact;print-color-adjust:exact;}
 }
 </style>
 </head>

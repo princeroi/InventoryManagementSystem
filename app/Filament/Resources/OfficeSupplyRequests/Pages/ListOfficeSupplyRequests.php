@@ -28,8 +28,9 @@ class ListOfficeSupplyRequests extends ListRecords
                     $record->load('employee', 'items');
 
                     User::officeSupplyApprovers()
-                        ->each
-                        ->notify(new OfficeSupplyRequestedNotification($record));
+                        ->each(fn (User $approver) =>
+                            $approver->notify(new OfficeSupplyRequestedNotification($record))
+                        );
                 }),
         ];
     }

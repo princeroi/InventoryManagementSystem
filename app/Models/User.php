@@ -34,7 +34,7 @@ class User extends Authenticatable implements FilamentUser, HasTenants
         return $this->roles()->exists() || $this->permissions()->exists();
     }
 
-    public function departments()
+    public function departments(): BelongsToMany
     {
         return $this->belongsToMany(Department::class, 'department_user');
     }
@@ -55,9 +55,18 @@ class User extends Authenticatable implements FilamentUser, HasTenants
         return $this->departments->contains($tenant);
     }
 
+    /**
+     * Returns users who can approve office supply requests
+     * and belong to the officesupply department.
+     *
+     * Uses distinct() to prevent Spatie's permission scope from
+     * returning duplicate rows when a user has the permission
+     * both directly AND via a role.
+     */
     public static function officeSupplyApprovers(): \Illuminate\Database\Eloquent\Collection
     {
         return static::permission('release office-supply-request')
+            ->distinct()  // ← fixes duplicate rows from Spatie's join
             ->get()
             ->filter(fn ($user) => $user->departments()
                 ->where('slug', 'officesupply')

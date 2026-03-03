@@ -11,6 +11,7 @@ use Filament\Facades\Filament;
 use Filament\Pages\Page;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Filament\Support\Enums\Width;
 
 class OfficeSupplyPos extends Page
 {
@@ -302,5 +303,15 @@ class OfficeSupplyPos extends Page
         $this->submitted = false;
         $this->cart = [];
         $this->selectedVariants = [];
+    }
+
+    protected function getHeaderWidgets(): array
+    {
+        return [];
+    }
+
+    public function getMaxContentWidth(): Width|string|null
+    {
+        return Width::Full;
     }
 }
